@@ -125,7 +125,7 @@ def main():
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument("--ip", type=str, default=None, help="ESP32 IP for HTTP mode")
     parser.add_argument("--interval", type=float, default=5.0, help="Seconds per lifecycle stage")
-    parser.add_argument("--repeat", action="store_true", help="Loop scenarios continuously")
+    parser.add_argument("--repeat", "--loop", dest="repeat", action="store_true", help="Loop scenarios continuously")
     args = parser.parse_args()
 
     print_banner()

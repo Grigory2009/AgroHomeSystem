@@ -52,13 +52,14 @@ chmod +x /etc/profile.d/agro_rpi_env.sh
 # 4. Lightweight Python Dependencies (without heavy PyTorch/CUDA wheels)
 echo -e "\n[3/5] Установка легковесного ML-стека (ONNX Runtime ARM NEON + OpenCV)..."
 PIP_FLAGS="--break-system-packages"
-pip3 install --upgrade pip $PIP_FLAGS || true
 pip3 install $PIP_FLAGS \
     onnxruntime \
     opencv-python-headless \
     numpy \
     pillow \
-    psutil
+    psutil \
+    pyserial \
+    requests
 
 # 5. Camera & Permissions
 echo -e "\n[4/5] Настройка доступа к видеоустройствам (V4L2)..."

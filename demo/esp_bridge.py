@@ -154,9 +154,20 @@ class EspBridge:
                 port=target_port,
                 baudrate=self.baudrate,
                 timeout=self.timeout,
-                write_timeout=self.timeout
+                write_timeout=None  # Предотвращает SerialTimeoutException на USB-CDC в Linux
             )
-            time.sleep(1.5)  # Пауза для стабилизации DTR/RTS
+            # Критически важно для USB CDC-ACM (ESP32-S3) на Linux/Raspberry Pi OS:
+            try:
+                self.ser.dtr = True
+                self.ser.rts = True
+            except Exception:
+                pass
+            time.sleep(1.0)  # Пауза для стабилизации DTR/RTS
+            try:
+                self.ser.reset_input_buffer()
+                self.ser.reset_output_buffer()
+            except Exception:
+                pass
             self.port = target_port
             self.connection_mode = "SERIAL"
             print(f"[EspBridge] Успешно подключено к ESP32 по Serial: {target_port} ({self.baudrate} baud)")
