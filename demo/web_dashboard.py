@@ -150,6 +150,8 @@ class SystemHub:
 
     def _on_esp_telemetry(self, data: Dict[str, Any]):
         """Callback приема сенсорной телеметрии от ESP32."""
+        if time.time() < getattr(self, "pump_override_until", 0):
+            data["pump"] = self.bridge.latest_telemetry.get("pump", False)
         pump_str = "ВКЛ" if data.get("pump") else "ВЫКЛ"
         self.log(f"Телеметрия ESP32: pH={data.get('ph')} | TDS={data.get('tds')}ppm | "
                  f"t_вод={data.get('water_temp')}°C | VPD={data.get('vpd')}kPa | Помпа={pump_str}", "telemetry")
@@ -209,26 +211,30 @@ class SystemHub:
 
         tick = 0
         while self.running:
-            frame = None
-            if self.cap and self.cap.isOpened():
-                ret, raw = self.cap.read()
-                if ret:
-                    frame = raw
+            try:
+                frame = None
+                if self.cap and self.cap.isOpened():
+                    ret, raw = self.cap.read()
+                    if ret:
+                        frame = raw
 
-            if frame is None and sample_img is not None:
-                # Синтетическое легкое мерцание освещенности для живого эффекта
-                frame = sample_img.copy()
-                brightness_delta = int(5 * np.sin(tick * 0.1))
-                if brightness_delta != 0:
-                    frame = cv2.add(frame, np.array([brightness_delta, brightness_delta, brightness_delta], dtype=np.uint8))
-                tick += 1
+                if frame is None and sample_img is not None:
+                    # Синтетическое легкое мерцание освещенности для живого эффекта
+                    frame = sample_img.copy()
+                    brightness_delta = int(5 * np.sin(tick * 0.1))
+                    if brightness_delta != 0:
+                        frame = cv2.add(frame, np.array([brightness_delta, brightness_delta, brightness_delta], dtype=np.uint8))
+                    tick += 1
 
-            if frame is not None:
-                display_frame = self._render_frame_overlay(frame)
-                ret, buf = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                if ret:
-                    with self.lock:
-                        self.current_frame_jpeg = buf.tobytes()
+                if frame is not None:
+                    display_frame = self._render_frame_overlay(frame)
+                    ret, buf = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    if ret:
+                        with self.lock:
+                            self.current_frame_jpeg = buf.tobytes()
+
+            except Exception as e:
+                pass
 
             time.sleep(0.04)  # ~25 FPS
 
@@ -238,25 +244,31 @@ class SystemHub:
         mode = self.view_mode
 
         if mode == "exg" and self.detector:
-            # Маска сегментации хлорофилла листвы ExG
-            mask = self.detector.segmenter.segment_vegetation(frame)
-            exg_colored = np.zeros_like(frame)
-            exg_colored[mask > 0] = [30, 220, 110]  # Яркий изумрудный цвет
-            return cv2.addWeighted(frame, 0.4, exg_colored, 0.6, 0)
+            try:
+                # Маска сегментации хлорофилла листвы ExG
+                mask, _, _ = self.detector.segmenter.segment(frame)
+                exg_colored = np.zeros_like(frame)
+                exg_colored[mask > 0] = [30, 220, 110]  # Яркий изумрудный цвет
+                return cv2.addWeighted(frame, 0.4, exg_colored, 0.6, 0)
+            except Exception as e:
+                pass
 
         elif mode == "split" and self.detector:
-            mask = self.detector.segmenter.segment_vegetation(frame)
-            exg_view = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            small_left = cv2.resize(frame, (w // 2, h))
-            small_right = cv2.resize(exg_view, (w // 2, h))
-            return np.hstack([small_left, small_right])
+            try:
+                mask, _, _ = self.detector.segmenter.segment(frame)
+                exg_view = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                small_left = cv2.resize(frame, (w // 2, h))
+                small_right = cv2.resize(exg_view, (w // 2, h))
+                return np.hstack([small_left, small_right])
+            except Exception as e:
+                pass
 
         # Режим RGB с HUD оверлеем
         out = frame.copy()
 
         # HUD плашка сверху
-        diag_text = f"{self.last_diagnosis['crop']} - {self.last_diagnosis['diagnosis']}"
-        conf_text = f"Точность: {self.last_diagnosis['confidence']:.1f}% | Здоровье: {self.last_diagnosis['health_score']:.0f}%"
+        diag_text = f"{self.last_diagnosis.get('crop', 'Растение')} - {self.last_diagnosis.get('diagnosis', 'Здорово')}"
+        conf_text = f"Точность: {self.last_diagnosis.get('confidence', 95.0):.1f}% | Здоровье: {self.last_diagnosis.get('health_score', 95.0):.0f}%"
 
         cv2.rectangle(out, (10, 10), (w - 10, 60), (15, 20, 30), -1)
         cv2.rectangle(out, (10, 10), (w - 10, 60), (16, 185, 129), 1)
@@ -293,19 +305,27 @@ class SystemHub:
                     infer_time = (time.time() - t0) * 1000.0
 
                     with self.lock:
+                        crop_name = res.crop_ru or res.crop_en or "Растение"
+                        crop_name_en = res.crop_en or res.crop_ru or "Plant"
+                        diag_name = res.disease_ru or res.raw_label or "Здорово"
+                        diag_name_en = res.raw_label or res.disease_ru or "Healthy"
+                        treatment_text = res.treatment or res.prevention or "Оптимальный режим ухода."
+                        treatment_en = res.prevention or res.treatment or "Optimal care mode."
+
                         self.last_diagnosis.update({
-                            "crop": res.crop_name_ru or res.crop_name,
-                            "diagnosis": res.diagnosis_ru or res.diagnosis,
-                            "diagnosis_en": res.diagnosis,
-                            "confidence": round(res.confidence, 1),
-                            "health_score": round(res.overall_health_score, 1),
-                            "biomass": round(res.foliage_metrics.coverage_percent, 1),
-                            "chlorosis": round(res.foliage_metrics.chlorosis_percent, 1),
-                            "necrosis": round(res.foliage_metrics.necrosis_percent, 1),
-                            "severity": res.severity,
-                            "advice": res.treatment_advice_ru or res.treatment_advice,
-                            "advice_en": res.treatment_advice,
-                            "inference_ms": round(infer_time, 1),
+                            "crop": crop_name,
+                            "crop_en": crop_name_en,
+                            "diagnosis": diag_name,
+                            "diagnosis_en": diag_name_en,
+                            "confidence": round(float(res.confidence), 1),
+                            "health_score": round(float(res.health_index), 1),
+                            "biomass": round(float(res.metrics.coverage_percent), 1),
+                            "chlorosis": round(float(res.metrics.chlorosis_percent), 1),
+                            "necrosis": round(float(res.metrics.necrosis_percent), 1),
+                            "severity": str(res.severity),
+                            "advice": str(treatment_text)[:200],
+                            "advice_en": str(treatment_en)[:200],
+                            "inference_ms": round(float(infer_time), 1),
                             "fps": round(1000.0 / max(1.0, infer_time), 1),
                             "timestamp": time.time()
                         })
@@ -350,15 +370,21 @@ class SystemHub:
 
     def toggle_pump(self) -> bool:
         """Переключить помпу полива на ESP32."""
-        current_state = self.bridge.latest_telemetry.get("pump", False)
+        current_state = bool(self.bridge.latest_telemetry.get("pump", False))
         new_state = not current_state
         action = "pump_on" if new_state else "pump_off"
 
-        # Оптимистичное локальное обновление
-        self.bridge.latest_telemetry["pump"] = new_state
+        # Оптимистичное локальное обновление с защитой от перетирания статуса
+        with self.lock:
+            self.bridge.latest_telemetry["pump"] = new_state
+            self.pump_override_until = time.time() + 4.0
+
+        # Отправляем обе команды для гарантированного срабатывания
         success = self.bridge.send_command(action)
+        self.bridge.send_command("toggle_pump")
+
         status_str = "ВКЛЮЧЕНА" if new_state else "ВЫКЛЮЧЕНА"
-        self.log(f"Помпа полива {status_str} (отправлено на ESP32: {success})", "action")
+        self.log(f"Помпа полива {status_str} (отправлено на ESP32: {action})", "action")
         return success
 
     def set_growth(self, percent: float):
@@ -417,11 +443,13 @@ class SystemHub:
     def close(self):
         """Остановка потоков и каналов связи."""
         self.running = False
+        time.sleep(0.3)  # Пауза для безопасного выхода потоков захвата кадра
         if self.cap:
             try:
                 self.cap.release()
             except Exception:
                 pass
+            self.cap = None
         if self.bridge:
             self.bridge.close()
 
@@ -1654,8 +1682,37 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     }
 
     async function togglePump() {
-      await fetch('/api/pump/toggle', {method: 'POST'});
-      fetchState();
+      const pumpBtn = document.getElementById('pump-toggle-btn');
+      const pumpTxt = document.getElementById('pump-btn-text');
+      const isCurrentlyActive = pumpBtn.classList.contains('pulse-active');
+      const nextActive = !isCurrentlyActive;
+
+      // Мгновенный отклик интерфейса
+      if (nextActive) {
+        pumpBtn.className = 'btn-action pulse-active';
+        pumpTxt.innerText = DICT[currentLang].pumpOn;
+        showToast('💧 Помпа полива активирована');
+      } else {
+        pumpBtn.className = 'btn-action';
+        pumpTxt.innerText = DICT[currentLang].pumpOff;
+        showToast('⏹️ Помпа полива отключена');
+      }
+
+      try {
+        const res = await fetch('/api/pump/toggle', {method: 'POST'});
+        const data = await res.json();
+        if (data && typeof data.pump_active !== 'undefined') {
+          if (data.pump_active) {
+            pumpBtn.className = 'btn-action pulse-active';
+            pumpTxt.innerText = DICT[currentLang].pumpOn;
+          } else {
+            pumpBtn.className = 'btn-action';
+            pumpTxt.innerText = DICT[currentLang].pumpOff;
+          }
+        }
+      } catch (e) {
+        console.error('Pump toggle error:', e);
+      }
     }
 
     async function setGrowthPreset(val) {

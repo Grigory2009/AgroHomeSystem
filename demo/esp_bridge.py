@@ -268,7 +268,7 @@ class EspBridge:
         # 1. Отправка через Serial (USB)
         if self.ser and self.ser.is_open:
             try:
-                line_data = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+                line_data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + "\n").encode("utf-8")
                 with self._lock:
                     self.ser.write(line_data)
                     self.ser.flush()
@@ -295,7 +295,7 @@ class EspBridge:
 
         if self.ser and self.ser.is_open:
             try:
-                line = (json.dumps(cmd_payload) + "\n").encode("utf-8")
+                line = (json.dumps(cmd_payload, separators=(',', ':')) + "\n").encode("utf-8")
                 with self._lock:
                     self.ser.write(line)
                     self.ser.flush()

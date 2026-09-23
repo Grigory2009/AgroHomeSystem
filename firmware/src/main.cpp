@@ -20,6 +20,7 @@
 #define TFT_DC    9
 #define TFT_RST   14
 #define TFT_BL    15    // Пин ШИМ-управления подсветкой экрана
+#define PUMP_PIN  16    // Пин силового реле помпы полива
 
 #define TOUCH_MOSI 6
 #define TOUCH_MISO 5
@@ -2066,12 +2067,21 @@ void drawVisionScreen() {
 // ПАРСИНГ JSON И ДВУСТОРОННЯЯ СВЯЗЬ С RASPBERRY PI
 // ==========================================
 String getJsonString(const String& json, const String& key) {
-  String pattern = "\"" + key + "\":\"";
+  String pattern = "\"" + key + "\":";
   int idx = json.indexOf(pattern);
   if (idx == -1) return "";
   idx += pattern.length();
-  int endIdx = json.indexOf("\"", idx);
-  if (endIdx == -1) return "";
+  while (idx < (int)json.length() && json[idx] == ' ') idx++;
+  if (idx < (int)json.length() && json[idx] == '\"') {
+    idx++;
+    int endIdx = json.indexOf("\"", idx);
+    if (endIdx == -1) return "";
+    return json.substring(idx, endIdx);
+  }
+  int endIdx = idx;
+  while (endIdx < (int)json.length() && json[endIdx] != ',' && json[endIdx] != '}' && json[endIdx] != ' ') {
+    endIdx++;
+  }
   return json.substring(idx, endIdx);
 }
 
@@ -2173,7 +2183,10 @@ void processSerialCommunication() {
             if (action == "pump_on") { pumpState = true; lastPumpState = true; }
             else if (action == "pump_off") { pumpState = false; lastPumpState = false; }
             else if (action == "toggle_pump") { pumpState = !pumpState; lastPumpState = pumpState; }
+            else if (action == "pet") { sproutLoveUntil = millis() + 6000; currentWisdomIndex = (currentWisdomIndex + 1) % WISDOM_COUNT; }
+            digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
             if (currentScreen == SCR_HOME && !isSleeping) refreshHomeValues();
+            if (currentScreen == SCR_SPROUT && !isSleeping) drawSproutScreen();
             sendSerialTelemetry("ack");
           }
         }
@@ -3440,6 +3453,10 @@ void handleTouches() {
 // ==========================================
 void setup() {
   Serial.begin(115200);
+
+  // Инициализация реле помпы
+  pinMode(PUMP_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN, LOW);
 
   // Инициализация палитры и подсветки
   applyTheme(THEME_CYBER_EMERALD);
