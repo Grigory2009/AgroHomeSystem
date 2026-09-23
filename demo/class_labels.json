@@ -1,0 +1,382 @@
+{
+  "Apple Scab": {
+    "crop": "Яблоня",
+    "crop_en": "Apple",
+    "disease_ru": "Парша яблони",
+    "pathogen": "Venturia inaequalis (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Обработка фунгицидами на основе меди (Бордоская жидкость, ХОМ) или Скор/Хорус. Удаление и сжигание опавших листьев.",
+    "prevention": "Обеспечить вентиляцию кроны, избегать вечернего дождевания листвы."
+  },
+  "Apple with Black Rot": {
+    "crop": "Яблоня",
+    "crop_en": "Apple",
+    "disease_ru": "Черная гниль яблони (Ботриосфериоз)",
+    "pathogen": "Botryosphaeria obtusa (Грибок)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Срочная обрезка пораженных ветвей с дезинфекцией инструмента. Обработка фунгицидами типа Топсин-М или Скор.",
+    "prevention": "Удаление мумифицированных плодов, дезинфекция коры и ран."
+  },
+  "Cedar Apple Rust": {
+    "crop": "Яблоня",
+    "crop_en": "Apple",
+    "disease_ru": "Ржавчина яблони",
+    "pathogen": "Gymnosporangium juniperi-virginianae (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Опрыскивание системными фунгицидами (Ракурс, Топаз, Абига-Пик) при первых признаках оранжевых пятен.",
+    "prevention": "Изоляция посадок яблони от можжевельников (промежуточного хозяина)."
+  },
+  "Healthy Apple": {
+    "crop": "Яблоня",
+    "crop_en": "Apple",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется. Лист здоров.",
+    "prevention": "Регулярный мониторинг, сбалансированные подкормки калием и фосфором."
+  },
+  "Healthy Blueberry Plant": {
+    "crop": "Голубика",
+    "crop_en": "Blueberry",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется. Листва в норме.",
+    "prevention": "Поддержание кислотности субстрата (pH 4.0-5.0), умеренный капельный полив."
+  },
+  "Cherry with Powdery Mildew": {
+    "crop": "Вишня/Черешня",
+    "crop_en": "Cherry",
+    "disease_ru": "Мучнистая роса вишни",
+    "pathogen": "Podosphaera clandestina (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Обработка препаратами серы (Тиовит Джет) или системными фунгицидами (Топаз, Скор). Фитоспорин-М для органики.",
+    "prevention": "Снижение избыточной влажности воздуха, прореживание ветвей для доступа света."
+  },
+  "Healthy Cherry Plant": {
+    "crop": "Вишня/Черешня",
+    "crop_en": "Cherry",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Профилактическая обработка медьсодержащими препаратами ранней весной."
+  },
+  "Corn (Maize) with Cercospora and Gray Leaf Spot": {
+    "crop": "Кукуруза",
+    "crop_en": "Corn",
+    "disease_ru": "Серая пятнистость листьев (Церкоспороз)",
+    "pathogen": "Cercospora zeae-maydis (Грибок)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Применение триазольных или стробилуриновых фунгицидов (Амистар Трио, Тилт).",
+    "prevention": "Севооборот, глубокая заделка растительных остатков, устойчивые гибриды."
+  },
+  "Corn (Maize) with Common Rust": {
+    "crop": "Кукуруза",
+    "crop_en": "Corn",
+    "disease_ru": "Обыкновенная ржавчина кукурузы",
+    "pathogen": "Puccinia sorghi (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "При сильном поражении — фунгициды на основе дифеноконазола или азоксистробина.",
+    "prevention": "Ранний сев, контроль влажности микроклимата."
+  },
+  "Corn (Maize) with Northern Leaf Blight": {
+    "crop": "Кукуруза",
+    "crop_en": "Corn",
+    "disease_ru": "Северный гельминтоспориоз кукурузы",
+    "pathogen": "Exserohilum turcicum (Грибок)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Обработка системными фунгицидами при появлении продолговатых серо-зеленых пятен.",
+    "prevention": "Уничтожение инфицированных остатков, применение устойчивых линий."
+  },
+  "Healthy Corn (Maize) Plant": {
+    "crop": "Кукуруза",
+    "crop_en": "Corn",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Контроль азотно-фосфорного питания, достаточный полив."
+  },
+  "Grape with Black Rot": {
+    "crop": "Виноград",
+    "crop_en": "Grape",
+    "disease_ru": "Черная гниль винограда",
+    "pathogen": "Guignardia bidwellii (Грибок)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Обработка фунгицидами Скор, Ридомил Голд, Хорус до и после цветения.",
+    "prevention": "Своевременная подвязка побегов, удаление мумифицированных ягод и сухих листьев."
+  },
+  "Grape with Esca (Black Measles)": {
+    "crop": "Виноград",
+    "crop_en": "Grape",
+    "disease_ru": "Эска винограда (Черная пятнистость)",
+    "pathogen": "Phaeomoniella chlamydospora & Fomitiporia (Комплекс грибков)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Лечение затруднено; вырезка пораженной древесины с захватом здоровой ткани на 5-10 см, дезинфекция ран пастой с триходермой.",
+    "prevention": "Защита ран при обрезке защитными герметиками, использование здорового посадочного материала."
+  },
+  "Grape with Isariopsis Leaf Spot": {
+    "crop": "Виноград",
+    "crop_en": "Grape",
+    "disease_ru": "Изариопсиоз листьев винограда",
+    "pathogen": "Pseudocercospora vitis (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Обработка контактными фунгицидами меди (Купроксат, Купролюкс) или дитиокарбаматами.",
+    "prevention": "Проветривание шпалеры, удаление загущающих пасынков."
+  },
+  "Healthy Grape Plant": {
+    "crop": "Виноград",
+    "crop_en": "Grape",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Профилактический биоконтроль (Bacillus subtilis, Триходерма)."
+  },
+  "Orange with Citrus Greening": {
+    "crop": "Цитрусовые (Апельсин)",
+    "crop_en": "Orange",
+    "disease_ru": "Позеленение цитрусовых (Хуанлунбин / Greening)",
+    "pathogen": "Candidatus Liberibacter (Бактерия, переносчик: цитрусовая листоблошка)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Неизлечимо; немедленная изоляция и уничтожение зараженного растения во избежание передачи на соседние культуры.",
+    "prevention": "Борьба с переносчиками (листоблошками) инсектицидами, карантин саженцев."
+  },
+  "Peach with Bacterial Spot": {
+    "crop": "Персик",
+    "crop_en": "Peach",
+    "disease_ru": "Бактериальная пятнистость персика",
+    "pathogen": "Xanthomonas arboricola pv. pruni (Бактерия)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Обработка медьсодержащими бактерицидами (оксихлорид меди, гидроксид меди) в низкой концентрации во избежание фитотоксичности.",
+    "prevention": "Избегать азотного перекорма, защита от ветровых травм листьев."
+  },
+  "Healthy Peach Plant": {
+    "crop": "Персик",
+    "crop_en": "Peach",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Санитарная весенняя обрезка, защита от курчавости."
+  },
+  "Bell Pepper with Bacterial Spot": {
+    "crop": "Сладкий перец",
+    "crop_en": "Bell Pepper",
+    "disease_ru": "Бактериальная пятнистость перца",
+    "pathogen": "Xanthomonas campestris pv. vesicatoria (Бактерия)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Опрыскивание Фитолавином, Касугамицином или медными препаратами. Изоляция полива (только под корень).",
+    "prevention": "Стерилизация гидропонных емкостей, контроль влажности ниже 70%, удаление больных листьев."
+  },
+  "Healthy Bell Pepper Plant": {
+    "crop": "Сладкий перец",
+    "crop_en": "Bell Pepper",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Оптимальная температура (22-26°C), регулярный полив сбалансированным раствором."
+  },
+  "Potato with Early Blight": {
+    "crop": "Картофель",
+    "crop_en": "Potato",
+    "disease_ru": "Ранний фитофтороз / Альтернариоз картофеля",
+    "pathogen": "Alternaria solani (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Фунгициды Ревус, Скор, Браво или медный купорос. Удаление нижних увядших листьев.",
+    "prevention": "Усиление калийного питания, недопущение пересыхания и резких скачков влажности."
+  },
+  "Potato with Late Blight": {
+    "crop": "Картофель",
+    "crop_en": "Potato",
+    "disease_ru": "Фитофтороз картофеля",
+    "pathogen": "Phytophthora infestans (Оомицет)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Срочная обработка системными оомицидными препаратами (Ридомил Голд, Инфинито, Квадрис).",
+    "prevention": "Снижение влажности воздуха, исключение капельной влаги на листьях, температура 18-22°C."
+  },
+  "Healthy Potato Plant": {
+    "crop": "Картофель",
+    "crop_en": "Potato",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Стабильный микроклимат, профилактический полив биофунгицидом Алирин-Б."
+  },
+  "Healthy Raspberry Plant": {
+    "crop": "Малина",
+    "crop_en": "Raspberry",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Своевременная подвязка побегов, полив без попадания на листву."
+  },
+  "Healthy Soybean Plant": {
+    "crop": "Соя",
+    "crop_en": "Soybean",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Контроль плотности посадки и аэрации корней."
+  },
+  "Squash with Powdery Mildew": {
+    "crop": "Тыквенные (Кабачок/Тыква/Огурец)",
+    "crop_en": "Squash",
+    "disease_ru": "Мучнистая роса тыквенных",
+    "pathogen": "Podosphaera xanthii (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Обработка биопрепаратами (Бактофит, Фитоспорин), либо фунгицидами Топаз, Квадрис. Раствор соды с мылом для легких форм.",
+    "prevention": "Улучшить циркуляцию воздуха, исключить избыток азотных удобрений."
+  },
+  "Strawberry with Leaf Scorch": {
+    "crop": "Земляника/Клубника",
+    "crop_en": "Strawberry",
+    "disease_ru": "Пурпуровая пятнистость (Ожог листьев земляники)",
+    "pathogen": "Diplocarpon earlianum (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Удаление старых пораженных листьев. Опрыскивание Хорусом, Луной Транквилити или препаратами меди.",
+    "prevention": "Не допускать загущения посадок, капельный полив под корень."
+  },
+  "Healthy Strawberry Plant": {
+    "crop": "Земляника/Клубника",
+    "crop_en": "Strawberry",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется.",
+    "prevention": "Контроль ЕС раствора, своевременное удаление усов и отмерших черешков."
+  },
+  "Tomato with Bacterial Spot": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Бактериальная черная пятнистость томата",
+    "pathogen": "Xanthomonas vesicatoria (Бактерия)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Обработка бактерицидами (Фитолавин, Казумин) в комбинации с гидроксидом меди. Прекратить дождевание.",
+    "prevention": "Дезинфекция инструмента и шпагата, снижение влажности воздуха ниже 75%."
+  },
+  "Tomato with Early Blight": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Ранняя сухая пятнистость томата (Альтернариоз)",
+    "pathogen": "Alternaria solani (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Удаление нижних пораженных листьев. Опрыскивание препаратами Ревус, Скор, Ордан или Ридомил.",
+    "prevention": "Мульчирование, нижний полив, калийные подкормки."
+  },
+  "Tomato with Late Blight": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Фитофтороз томата",
+    "pathogen": "Phytophthora infestans (Оомицет)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Немедленная обработка: Инфинито, Консенто, Квадрис или Браво. При сильном поражении куста — удаление.",
+    "prevention": "Не допускать конденсата на листьях в теплице/гроубоксе, вентиляция в ночные часы, ночная температура >15°C."
+  },
+  "Tomato with Leaf Mold": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Бурая пятнистость листьев томата (Кладоспориоз)",
+    "pathogen": "Passalora fulva / Cladosporium (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Снизить влажность в гроубоксе/теплице до 60-65%. Обработка биофунгицидом Триходерма Вериде или препаратами меди.",
+    "prevention": "Интенсивная вентиляция, удаление нижнего яруса листьев до первой плодовой кисти."
+  },
+  "Tomato with Septoria Leaf Spot": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Белая пятнистость листьев томата (Септориоз)",
+    "pathogen": "Septoria lycopersici (Грибок)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Удалить пораженные листья. Обработка фунгицидами: Танос, Профит Голд или бордоская смесь.",
+    "prevention": "Избегать попадания капель воды на листья при поливе, дезинфекция каркаса теплицы."
+  },
+  "Tomato with Spider Mites or Two-spotted Spider Mite": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Паутинный клещ на томате",
+    "pathogen": "Tetranychus urticae (Вредитель - клещ)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Обработка акарицидами (Фитоверм, Битоксибациллин для био, либо Вертимек, Оберон). Обработка обратной стороны листа.",
+    "prevention": "Поддержание нормальной влажности (сухой воздух способствует вспышке клеща), выпуск хищных клещей Фитосейулюс."
+  },
+  "Tomato with Target Spot": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Мишеневидная пятнистость томата (Коринеспороз)",
+    "pathogen": "Corynespora cassiicola (Грибок)",
+    "is_healthy": false,
+    "severity": "Severe",
+    "treatment": "Применение системных фунгицидов (Браво, Фалькон, Квадрис).",
+    "prevention": "Оптимизация густоты посадки, проветривание."
+  },
+  "Tomato Yellow Leaf Curl Virus": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Желтая курчавость листьев томата (TYLCV)",
+    "pathogen": "Tomato Yellow Leaf Curl Virus (Вирус, переносчик: белокрылка)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Вирус не лечится химикатами; уничтожение зараженных растений. Срочная борьба с белокрылкой (Теппеки, Актара, желтые клеевые ловушки).",
+    "prevention": "Установка противомоскитных сеток на приточную вентиляцию, кварцевание."
+  },
+  "Tomato Mosaic Virus": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Вирус мозаики томата (ToMV)",
+    "pathogen": "Tomato Mosaic Virus (Вирус)",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Удаление и утилизация зараженного куста. Тщательная дезинфекция рук и ножниц раствором марганцовки или спирта.",
+    "prevention": "Использование семян от надежных производителей, обеззараживание грунта/субстрата."
+  },
+  "Healthy Tomato Plant": {
+    "crop": "Томат",
+    "crop_en": "Tomato",
+    "disease_ru": "Здоровое растение",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Лечение не требуется. Растение здорово и активно фотосинтезирует.",
+    "prevention": "Поддержание оптимального микроклимата (20-25°C день, 16-18°C ночь, влажность 65%)."
+  }
+}

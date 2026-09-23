@@ -1,10 +1,20 @@
+# AgroHomeSystem - Plant Health Engine Requirements
+# Fully compatible with Windows, Linux, and Raspberry Pi 4 (8GB)
+
+# Fast Edge Inference (Recommended for Raspberry Pi 4 & CPU)
+onnxruntime>=1.15.0
 opencv-python-headless>=4.8.0
-ultralytics>=8.0.0
+numpy>=1.24.0
+pillow>=9.5.0
+psutil>=5.9.0
+
+# User Interfaces & Telemetry
+streamlit>=1.25.0
+pandas>=2.0.0
+requests>=2.28.0
+
+# Optional PyTorch/TorchScript/Transformers backends (for training/legacy models)
 torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.30.0
-streamlit>=1.25.0
-pillow>=9.5.0
-numpy>=1.24.0
-pandas>=2.0.0
-requests>=2.28.0
+ultralytics>=8.0.0

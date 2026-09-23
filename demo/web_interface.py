@@ -1,417 +1,307 @@
 #!/usr/bin/env python3
 """
-Web Interface for Real-time Plant Disease Detection
-Streamlit UI для удобного распознавания болезней растений с камеры
+AgroHomeSystem - Web Interface for Plant Health & Disease Diagnostics
+Streamlit UI для визуальной диагностики здоровья растений с камеры и по фото.
+Оптимизировано для Raspberry Pi 4 (8GB) и персональных компьютеров.
 """
 
+import sys
+import os
+import time
+from pathlib import Path
+from datetime import datetime
+from PIL import Image
+
+# pyrefly: ignore [missing-import]
 import streamlit as st
 import cv2
 import numpy as np
-import torch
-from pathlib import Path
-from ultralytics import YOLO
-from transformers import pipeline
-from PIL import Image
-import time
-from datetime import datetime
+
+# Ensure UTF-8 console output on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+from plant_health_engine import PlantHealthDetector, DiagnosisResult, AGRONOMIC_KNOWLEDGE_BASE
 
 st.set_page_config(
-    page_title="Plant Disease Detection",
+    page_title="AgroHomeSystem - Plant Health",
     page_icon="🌱",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS for modern agronomic dashboard
 st.markdown("""
     <style>
-    .main {
-        padding: 2rem;
-    }
+    .main { padding: 1.5rem; }
     .stButton button {
         width: 100%;
-        padding: 0.75rem;
+        padding: 0.6rem;
         border-radius: 0.5rem;
         font-weight: bold;
     }
-    .metric-box {
+    .metric-card {
+        padding: 1rem;
+        border-radius: 0.6rem;
+        background-color: #f7f9fa;
+        border-left: 5px solid #2e7d32;
+        margin-bottom: 0.8rem;
+    }
+    .alert-healthy {
+        background-color: #e8f5e9;
+        border-left: 5px solid #2e7d32;
         padding: 1rem;
         border-radius: 0.5rem;
-        background-color: #f0f2f6;
-        margin: 0.5rem 0;
+        color: #1b5e20;
     }
-    .disease-alert {
+    .alert-warning {
+        background-color: #fff8e1;
+        border-left: 5px solid #f57f17;
         padding: 1rem;
         border-radius: 0.5rem;
-        border-left: 4px solid;
+        color: #e65100;
     }
-    .disease-healthy {
-        background-color: #d4edda;
-        border-color: #28a745;
-        color: #155724;
-    }
-    .disease-detected {
-        background-color: #f8d7da;
-        border-color: #dc3545;
-        color: #721c24;
+    .alert-danger {
+        background-color: #ffebee;
+        border-left: 5px solid #c62828;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        color: #b71c1c;
     }
     </style>
 """, unsafe_allow_html=True)
 
+
 @st.cache_resource
-def load_models():
-    """Load YOLO and classification models once"""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Load YOLO
-    yolo = YOLO("yolov8n-seg.pt")
-    
-    # Load classifier
-    classifier = pipeline(
-        "image-classification",
-        model="AishaKanwal/ModelsViT_PlantDisease",
-        device=0 if device == "cuda" else -1
-    )
-    
-    return yolo, classifier, device
+def load_detector():
+    """Load optimized plant health detector once."""
+    return PlantHealthDetector(backend="auto", num_threads=4)
 
-def segment_and_classify(frame, yolo, classifier):
-    """Segment and classify diseases in frame"""
-    h, w = frame.shape[:2]
-    results_list = []
-    
-    # YOLO segmentation
-    results = yolo(frame, verbose=False)
-    
-    if results and len(results) > 0:
-        result = results[0]
-        if result.masks is not None and len(result.masks) > 0:
-            for idx, mask in enumerate(result.masks.data):
-                mask_np = mask.cpu().numpy() if torch.is_tensor(mask) else mask
-                
-                # Get bounding box
-                box = result.boxes.xyxy[idx].cpu().numpy().astype(int)
-                x1, y1, x2, y2 = max(0, box[0]), max(0, box[1]), min(w, box[2]), min(h, box[3])
-                
-                if x2 - x1 > 10 and y2 - y1 > 10:
-                    # Classify masked region
-                    mask_3d = np.stack([mask_np] * 3, axis=-1)
-                    masked_region = (frame * mask_3d).astype(np.uint8)
-                    
-                    try:
-                        cls_results = classifier(masked_region)
-                        if cls_results:
-                            results_list.append({
-                                'diagnosis': cls_results[0]['label'],
-                                'confidence': cls_results[0]['score'],
-                                'mask': mask_np,
-                                'box': (x1, y1, x2, y2)
-                            })
-                    except:
-                        pass
-    
-    # Fallback: classify entire frame if no segmentation
-    if len(results_list) == 0:
-        try:
-            cls_results = classifier(frame)
-            if cls_results:
-                results_list.append({
-                    'diagnosis': cls_results[0]['label'],
-                    'confidence': cls_results[0]['score'],
-                    'mask': None,
-                    'box': None
-                })
-        except:
-            pass
-    
-    return results_list
-
-def visualize_results(frame, results_list):
-    """Visualize detection results on frame"""
-    h, w = frame.shape[:2]
-    display_frame = frame.copy()
-    
-    disease_colors = {
-        "Late_Blight": (0, 0, 255),
-        "Early_Blight": (0, 165, 255),
-        "Septoria_Leaf_Spot": (255, 0, 0),
-        "Rust": (0, 165, 0),
-        "Powdery_Mildew": (255, 255, 0),
-        "Bacterial_Spot": (255, 0, 255),
-        "Healthy": (0, 255, 0)
-    }
-    
-    for result in results_list:
-        diagnosis = result['diagnosis']
-        confidence = result['confidence']
-        mask = result['mask']
-        box = result['box']
-        
-        color = disease_colors.get(diagnosis, (0, 255, 0))
-        
-        # Draw mask if available
-        if mask is not None:
-            mask_resized = cv2.resize(mask, (w, h))
-            mask_uint8 = (mask_resized * 255).astype(np.uint8)
-            
-            overlay = display_frame.copy()
-            overlay[mask_uint8 > 128] = cv2.addWeighted(
-                display_frame[mask_uint8 > 128], 0.6,
-                np.array(color, dtype=np.uint8), 0.4, 0
-            )
-            display_frame = cv2.addWeighted(display_frame, 0.7, overlay, 0.3, 0)
-        
-        # Draw bounding box
-        if box is not None:
-            x1, y1, x2, y2 = box
-            cv2.rectangle(display_frame, (x1, y1), (x2, y2), color, 2)
-            label = f"{diagnosis}: {confidence*100:.1f}%"
-            cv2.putText(display_frame, label, (x1, max(20, y1 - 5)),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-    
-    return display_frame
 
 def main():
-    # Header
+    detector = load_detector()
+
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.title("🌱 Plant Disease Detection System")
-        st.markdown("Real-time plant disease recognition using AI")
+        st.title("🌱 AgroHomeSystem: Plant Health AI")
+        st.markdown(f"**Edge-оптимизированная диагностика здоровья растений (RPi 4)** | Активный движок: `{detector.classifier.engine_type.upper()}`")
     with col2:
-        st.metric("Status", "Ready ✓", delta="Online")
-    
-    # Sidebar
+        st.metric("Статус системы", "Готов ✓", delta=f"{detector.classifier.engine_type.upper()}")
+
+    # Sidebar navigation
     with st.sidebar:
-        st.header("⚙️ Settings")
-        
-        mode = st.radio("Select Mode", ["Real-time Camera", "Upload Image", "About"])
-        
+        st.header("⚙️ Режим работы")
+        mode = st.radio("Выберите режим", ["📷 Веб-камера (Real-time)", "📤 Загрузка фото", "📚 Справочник болезней (38)"])
         st.markdown("---")
-        st.subheader("Model Info")
-        st.info("""
-        **Segmentation:** YOLO v8 Nano  
-        **Classification:** Vision Transformer  
-        **Device:** CPU/GPU (auto-detected)
+        st.subheader("Характеристики системы")
+        st.info(f"""
+        - **Архитектура:** MobileNetV2 + ExG Segmentation
+        - **Классов:** 38 патологий и здоровых культур
+        - **Оптимизация:** Raspberry Pi 4 (8GB)
+        - **Движок:** {detector.classifier.engine_type.upper()}
+        - **Память:** ~60 МБ RAM
         """)
-    
-    # Load models
-    with st.spinner("Loading models..."):
-        yolo, classifier, device = load_models()
-    
-    if mode == "Real-time Camera":
-        st.subheader("📷 Real-time Detection")
-        
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown("### Video Feed")
+
+    # 1. Real-time Camera
+    if mode == "📷 Веб-камера (Real-time)":
+        st.subheader("Режим реального времени")
+
+        c1, c2 = st.columns([2, 1])
+        with c1:
             video_placeholder = st.empty()
-        
-        with col2:
-            st.markdown("### Detection Results")
-            results_placeholder = st.empty()
+        with c2:
+            diag_placeholder = st.empty()
             metrics_placeholder = st.empty()
-        
-        # Camera settings
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            camera_id = st.number_input("Camera ID", min_value=0, value=0, step=1)
-        with col2:
-            fps_target = st.slider("Target FPS", 1, 30, 15)
-        with col3:
-            confidence_threshold = st.slider("Confidence Threshold", 0.0, 1.0, 0.3)
-        
-        start_button = st.button("▶ Start Camera", key="start_camera")
-        stop_button = st.button("⏹ Stop Camera", key="stop_camera")
-        
-        if start_button:
-            cap = cv2.VideoCapture(camera_id)
-            
+            treat_placeholder = st.empty()
+
+        # Camera discovery
+        from diagnose_camera import scan_available_cameras, get_camera_backend
+        cams = scan_available_cameras()
+        cam_options = {}
+        default_index = 0
+        if cams:
+            best_id = max(cams, key=lambda c: c["width"] * c["height"])["id"]
+            for i, c in enumerate(cams):
+                tag = " (Рекомендуется)" if c["id"] == best_id else ""
+                label = f"{c['description']}{tag}"
+                cam_options[label] = c["id"]
+                if c["id"] == best_id:
+                    default_index = i
+        else:
+            cam_options["Камера 0 (По умолчанию)"] = 0
+
+        col_cam, col_fps, col_rate = st.columns(3)
+        with col_cam:
+            chosen_cam_label = st.selectbox("Камера", list(cam_options.keys()), index=default_index)
+            camera_id = cam_options[chosen_cam_label]
+        with col_fps:
+            target_fps = st.slider("Целевой FPS рендера", 5, 30, 15)
+        with col_rate:
+            infer_rate = st.slider("Частота инференса нейросети (Hz)", 1, 15, 5)
+
+        run_camera = st.checkbox("Запустить видеопоток", value=False)
+
+        if run_camera:
+            preferred_backend = get_camera_backend()
+            cap = cv2.VideoCapture(int(camera_id), preferred_backend) if preferred_backend != 0 else cv2.VideoCapture(int(camera_id))
+            if not cap.isOpened() and preferred_backend != 0:
+                cap = cv2.VideoCapture(int(camera_id))
+
             if not cap.isOpened():
-                st.error(f"Cannot open camera {camera_id}")
+                st.error(f"Не удалось открыть камеру {camera_id}.")
                 return
-            
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap.set(cv2.CAP_PROP_FPS, 30)
-            
-            st.success("Camera started!")
-            
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+            last_infer_time = 0.0
+            last_diag = None
+            infer_interval = 1.0 / infer_rate
             frame_count = 0
-            start_time = time.time()
-            
-            while True:
+            t_start = time.time()
+
+            while run_camera:
                 ret, frame = cap.read()
                 if not ret:
-                    st.error("Failed to read frame")
+                    st.warning("Нет сигнала с камеры.")
                     break
-                
-                # Process frame
-                results_list = segment_and_classify(frame, yolo, classifier)
-                display_frame = visualize_results(frame, results_list)
-                
-                # Display
-                video_placeholder.image(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB), 
-                                       use_column_width=True)
-                
-                # Update results
-                if results_list:
-                    result = results_list[0]
-                    with results_placeholder.container():
-                        if result['diagnosis'] == "Healthy":
-                            st.markdown(f"""
-                            <div class="disease-alert disease-healthy">
-                            <strong>Status:</strong> ✓ Healthy<br>
-                            <strong>Confidence:</strong> {result['confidence']*100:.1f}%
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"""
-                            <div class="disease-alert disease-detected">
-                            <strong>⚠️ Disease Detected!</strong><br>
-                            <strong>Type:</strong> {result['diagnosis']}<br>
-                            <strong>Confidence:</strong> {result['confidence']*100:.1f}%
-                            </div>
-                            """, unsafe_allow_html=True)
-                
-                # Update metrics
-                frame_count += 1
-                elapsed = time.time() - start_time
-                fps = frame_count / elapsed if elapsed > 0 else 0
-                
+
+                now = time.time()
+                if (now - last_infer_time) >= infer_interval or last_diag is None:
+                    last_diag = detector.diagnose(frame)
+                    last_infer_time = now
+
+                display_frame = detector.draw_hud(frame, last_diag)
+                rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+                video_placeholder.image(rgb_frame, channels="RGB", use_column_width=True)
+
+                # Render diagnostic cards in sidebar/col2
+                with diag_placeholder.container():
+                    hi = last_diag.health_index
+                    if hi >= 80:
+                        st.markdown(f"""
+                        <div class="alert-healthy">
+                        <h3>✓ Растение здорово</h3>
+                        <b>Культура:</b> {last_diag.crop_ru}<br>
+                        <b>Индекс здоровья:</b> {hi:.1f}%<br>
+                        <b>Уверенность:</b> {last_diag.confidence:.1f}%
+                        </div>
+                        """, unsafe_allow_html=True)
+                    elif hi >= 50:
+                        st.markdown(f"""
+                        <div class="alert-warning">
+                        <h3>⚠️ Внимание: {last_diag.disease_ru}</h3>
+                        <b>Культура:</b> {last_diag.crop_ru}<br>
+                        <b>Индекс здоровья:</b> {hi:.1f}%<br>
+                        <b>Тяжесть:</b> {last_diag.severity}
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div class="alert-danger">
+                        <h3>🚨 Тревога: {last_diag.disease_ru}</h3>
+                        <b>Культура:</b> {last_diag.crop_ru}<br>
+                        <b>Индекс здоровья:</b> {hi:.1f}%<br>
+                        <b>Возбудитель:</b> {last_diag.pathogen}
+                        </div>
+                        """, unsafe_allow_html=True)
+
                 with metrics_placeholder.container():
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("FPS", f"{fps:.1f}")
-                    with col2:
-                        st.metric("Frames", frame_count)
-                
-                # Check for stop
-                if stop_button:
-                    break
-                
-                time.sleep(1 / fps_target)
-            
+                    m = last_diag.metrics
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Зелень", f"{m.healthy_green_ratio*100:.0f}%")
+                    m2.metric("Хлороз", f"{m.chlorosis_ratio*100:.0f}%")
+                    m3.metric("Некроз", f"{m.necrosis_ratio*100:.0f}%")
+
+                with treat_placeholder.container():
+                    st.markdown("**Терапия:** " + last_diag.treatment)
+
+                frame_count += 1
+                time.sleep(1.0 / target_fps)
+
             cap.release()
-            st.info("Camera stopped")
-    
-    elif mode == "Upload Image":
-        st.subheader("📤 Upload Image for Analysis")
-        
-        uploaded_file = st.file_uploader("Choose an image", type=["jpg", "jpeg", "png", "bmp"])
-        
+
+    # 2. Upload Image
+    elif mode == "📤 Загрузка фото":
+        st.subheader("Анализ одиночной фотографии листа / растения")
+        uploaded_file = st.file_uploader("Выберите фото растения (.jpg, .jpeg, .png)", type=["jpg", "jpeg", "png", "bmp", "webp"])
+
+        # Quick test samples
+        st.markdown("Или выберите тестовый образец из каталога:")
+        test_samples = ["test_leaf.jpg", "sample_pepper_healthy.jpg", "sample_corn_rust.jpg", "sample_peach_healthy.jpg", "sample_pepper_bacterial_spot.jpg"]
+        chosen_sample = st.selectbox("Тестовые изображения", ["-- Выберите --"] + test_samples)
+
+        frame = None
         if uploaded_file is not None:
-            # Load image
-            image = Image.open(uploaded_file)
-            image_np = np.array(image)
-            
-            # Convert RGB to BGR for OpenCV
-            if len(image_np.shape) == 3 and image_np.shape[2] == 3:
-                frame = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
-            else:
-                frame = image_np
-            
-            col1, col2 = st.columns([2, 1])
-            
+            pil_img = Image.open(uploaded_file)
+            frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+        elif chosen_sample != "-- Выберите --" and Path(chosen_sample).exists():
+            frame = cv2.imread(chosen_sample)
+
+        if frame is not None:
+            with st.spinner("Диагностика образца..."):
+                result: DiagnosisResult = detector.diagnose(frame)
+                annotated = detector.draw_hud(frame, result)
+
+            col1, col2 = st.columns([3, 2])
             with col1:
-                st.markdown("### Original Image")
-                st.image(image, use_column_width=True)
-            
+                st.markdown("### Анализ изображения с HUD")
+                st.image(cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB), use_column_width=True)
+
             with col2:
-                st.markdown("### Analysis Results")
-                
-                # Process
-                with st.spinner("Analyzing..."):
-                    results_list = segment_and_classify(frame, yolo, classifier)
-                    display_frame = visualize_results(frame, results_list)
-                
-                # Show results
-                st.markdown("#### Detection Results")
-                if results_list:
-                    for i, result in enumerate(results_list, 1):
-                        diagnosis = result['diagnosis']
-                        confidence = result['confidence']
-                        
-                        if diagnosis == "Healthy":
-                            st.success(f"**Object {i}:** ✓ Healthy ({confidence*100:.1f}%)")
-                        else:
-                            st.error(f"**Object {i}:** ⚠️ {diagnosis} ({confidence*100:.1f}%)")
+                st.markdown("### Заключение агрономической экспертизы")
+                hi = result.health_index
+                if result.is_healthy:
+                    st.success(f"✓ {result.crop_ru}: Здоровое растение ({result.confidence:.1f}%)")
                 else:
-                    st.warning("No objects detected")
-            
-            st.markdown("---")
-            st.markdown("### Segmentation Visualization")
-            st.image(cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB), use_column_width=True)
-            
-            # Save results
-            if st.button("💾 Save Results"):
-                save_dir = Path("detection_results")
-                save_dir.mkdir(exist_ok=True)
-                
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                
-                # Save segmented image
-                seg_path = save_dir / f"segmented_{timestamp}.jpg"
-                cv2.imwrite(str(seg_path), display_frame)
-                
-                # Save results CSV
-                csv_path = save_dir / f"results_{timestamp}.csv"
-                with open(csv_path, "w") as f:
-                    f.write("diagnosis,confidence\n")
-                    for result in results_list:
-                        f.write(f"{result['diagnosis']},{result['confidence']:.4f}\n")
-                
-                st.success(f"Results saved to {save_dir}/")
-    
-    elif mode == "About":
-        st.markdown("""
-        ## About This Application
-        
-        ### Features
-        - 🎥 Real-time disease detection from camera
-        - 📤 Image upload and analysis
-        - 🎯 YOLO-based object segmentation
-        - 🤖 Vision Transformer classification
-        - 📊 Confidence scoring
-        - 💾 Results export
-        
-        ### Supported Diseases
-        - **Late Blight** - Phytophthora infestans
-        - **Early Blight** - Alternaria solani
-        - **Septoria Leaf Spot** - Septoria lycopersici
-        - **Rust** - Various rust fungi
-        - **Powdery Mildew** - Oidium species
-        - **Bacterial Spot** - Xanthomonas species
-        - **Healthy** - No disease detected
-        
-        ### Technical Stack
-        - **Segmentation:** YOLO v8 Nano
-        - **Classification:** Vision Transformer (ViT)
-        - **Framework:** Streamlit
-        - **Processing:** OpenCV, PyTorch
-        
-        ### Performance
-        - **Inference Speed:** 50-150ms per frame
-        - **GPU Support:** CUDA/CPU auto-detected
-        - **Memory Usage:** ~700 MB
-        
-        ### Usage Tips
-        1. Ensure good lighting for better accuracy
-        2. Focus on affected plant areas
-        3. Keep objects centered in frame
-        4. Use high-quality images
-        
-        ### Troubleshooting
-        - **Camera not opening:** Check camera ID (usually 0)
-        - **Low confidence:** Try adjusting lighting or distance
-        - **Slow processing:** Consider reducing image resolution
-        
-        ---
-        
-        **Version:** 1.0  
-        **Status:** Production Ready  
-        **Last Updated:** 2026-08-18
-        """)
+                    st.error(f"⚠️ {result.crop_ru}: {result.disease_ru} ({result.confidence:.1f}%)")
+
+                st.progress(int(hi))
+                st.write(f"**Интегральный индекс жизнеспособности:** {hi:.1f} / 100")
+
+                st.markdown(f"**Возбудитель:** {result.pathogen}")
+                st.markdown(f"**Тяжесть заболевания:** {result.severity}")
+                st.markdown(f"**Время инференса:** {result.processing_time_ms:.1f} мс")
+
+                st.markdown("---")
+                st.markdown("#### Биофизические индексы")
+                m = result.metrics
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Здоровая ткань", f"{m.healthy_green_ratio*100:.1f}%")
+                m2.metric("Хлороз (желтизна)", f"{m.chlorosis_ratio*100:.1f}%")
+                m3.metric("Некроз (отмирание)", f"{m.necrosis_ratio*100:.1f}%")
+
+                st.markdown("---")
+                st.markdown("#### Протокол лечения:")
+                st.info(f"💊 **Терапия:** {result.treatment}")
+                st.warning(f"🛡️ **Профилактика:** {result.prevention}")
+
+                st.markdown("#### Топ альтернативных диагнозов:")
+                for i, cand in enumerate(result.top_candidates[:3], 1):
+                    st.write(f"{i}. {cand['crop_ru']} - {cand['disease_ru']}: {cand['confidence']*100:.1f}%")
+
+    # 3. Knowledge Base
+    elif mode == "📚 Справочник болезней (38)":
+        st.subheader("Агрономическая база знаний (38 классов PlantVillage)")
+        st.markdown("Полный перечень поддерживаемых культур и фитопатологий с протоколами лечения:")
+
+        search_query = st.text_input("Поиск по культуре или болезни", "").lower()
+
+        for class_name, data in AGRONOMIC_KNOWLEDGE_BASE.items():
+            if search_query:
+                combined_text = f"{data['crop']} {data['disease_ru']} {class_name} {data['pathogen']}".lower()
+                if search_query not in combined_text:
+                    continue
+
+            with st.expander(f"{'✓' if data['is_healthy'] else '⚠️'} {data['crop']}: {data['disease_ru']} ({class_name})"):
+                st.write(f"**Культура:** {data['crop']} ({data['crop_en']})")
+                st.write(f"**Патоген:** {data['pathogen']}")
+                st.write(f"**Тяжесть:** {data['severity']}")
+                st.write(f"**Лечение:** {data['treatment']}")
+                st.write(f"**Профилактика:** {data['prevention']}")
 
 
 if __name__ == "__main__":

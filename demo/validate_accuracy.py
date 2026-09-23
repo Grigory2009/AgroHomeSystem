@@ -1,175 +1,192 @@
-import cv2
-import torch
-import numpy as np
+#!/usr/bin/env python3
+"""
+AgroHomeSystem - Model Validation & Accuracy Benchmark
+Валидация точности и тестирование алгоритма на размеченных изображениях.
+Поддерживает 38 классов заболеваний и культур.
+"""
+
+import sys
 import os
-from PIL import Image
-from ultralytics import YOLO
-from transformers import pipeline
 import csv
+import time
+import argparse
 from pathlib import Path
+from typing import Dict, List, Any, Optional
 from collections import defaultdict
 
-print("=" * 70)
-print("Plant Disease Classification - Validation Accuracy Report")
-print("=" * 70)
+import cv2
+import numpy as np
 
-# Initialize models
-print("\nInitializing models...")
-device = 0 if torch.cuda.is_available() else -1
-segment_model = YOLO("yolov8n-seg.pt")
-model_id = os.getenv("HF_PLANT_MODEL", "AishaKanwal/ModelsViT_PlantDisease")
-disease_classifier = pipeline("image-classification", model=model_id, device=device)
-print(f"Model: {model_id}")
+# Ensure UTF-8 console output on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
-# Create validation dataset structure
-validation_dir = Path("validation_dataset")
-validation_dir.mkdir(exist_ok=True)
+from plant_health_engine import PlantHealthDetector, DiagnosisResult, AGRONOMIC_KNOWLEDGE_BASE
 
-# Define expected diseases with example descriptions
-expected_diseases = {
-    "Late_Blight": "Phytophthora infestans - Brown watery spots on leaves",
-    "Early_Blight": "Alternaria solani - Brown concentric rings on leaves",
-    "Septoria_Leaf_Spot": "Septoria lycopersici - Small circular spots",
-    "Rust": "Puccinia species - Orange/brown pustules on undersides",
-    "Powdery_Mildew": "White powder on leaves and stems",
-    "Healthy": "No visible disease symptoms",
+
+# Canonical disease mapping matching folder names to model labels
+DISEASE_NAME_MAP = {
+    "late_blight": ["tomato with late blight", "potato with late blight"],
+    "early_blight": ["tomato with early blight", "potato with early blight"],
+    "septoria_leaf_spot": ["tomato with septoria leaf spot"],
+    "rust": ["cedar apple rust", "corn (maize) with common rust"],
+    "powdery_mildew": ["cherry with powdery mildew", "squash with powdery mildew"],
+    "bacterial_spot": ["peach with bacterial spot", "bell pepper with bacterial spot", "tomato with bacterial spot"],
+    "black_rot": ["apple with black rot", "grape with black rot"],
+    "healthy": ["healthy apple", "healthy blueberry plant", "healthy cherry plant",
+                "healthy corn (maize) plant", "healthy grape plant", "healthy peach plant",
+                "healthy bell pepper plant", "healthy potato plant", "healthy raspberry plant",
+                "healthy soybean plant", "healthy strawberry plant", "healthy tomato plant"]
 }
 
-print(f"\nExpected disease classes:")
-for disease in expected_diseases.keys():
-    print(f"  - {disease}")
 
-# Create folders for each disease
-for disease in expected_diseases.keys():
-    disease_dir = validation_dir / disease
-    disease_dir.mkdir(exist_ok=True)
+def matches_expected(predicted_label: str, expected_folder: str) -> bool:
+    """Check if model predicted label corresponds to expected disease folder."""
+    p_lower = predicted_label.lower().strip()
+    e_clean = expected_folder.lower().strip().replace("-", "_").replace(" ", "_")
 
-print(f"\nValidation dataset structure created at: {validation_dir}")
-print("\n" + "=" * 70)
-print("INSTRUCTIONS:")
-print("=" * 70)
-print("1. Download or prepare plant disease images")
-print("2. Place them in the appropriate folder:")
-for disease in expected_diseases.keys():
-    print(f"   {validation_dir / disease}/")
-print("\n3. Run this script again to evaluate accuracy")
-print("\n" + "=" * 70)
-print("Currently scanning validation_dataset for test images...")
+    # Direct substring check
+    if e_clean in p_lower.replace("-", "_").replace(" ", "_"):
+        return True
 
-# Find all test images
-test_results = []
-all_predictions = []
+    # Canonical dictionary lookup
+    for key, candidates in DISEASE_NAME_MAP.items():
+        if key in e_clean:
+            for cand in candidates:
+                if cand in p_lower:
+                    return True
 
-image_extensions = [".jpg", ".jpeg", ".png", ".JPG", ".JPEG", ".PNG"]
+    # Healthy match
+    if "healthy" in e_clean and "healthy" in p_lower:
+        return True
 
-for disease_folder in validation_dir.iterdir():
-    if not disease_folder.is_dir():
-        continue
-    
-    expected_disease = disease_folder.name
-    image_files = []
-    
-    for ext in image_extensions:
-        image_files.extend(disease_folder.glob(f"*{ext}"))
-    
-    if not image_files:
-        print(f"\n{expected_disease}: (no images found)")
-        continue
-    
-    print(f"\n{expected_disease}: {len(image_files)} images found")
-    
-    for img_path in image_files:
-        try:
-            img = cv2.imread(str(img_path))
-            if img is None:
-                continue
-            
-            # Run YOLO segmentation
-            yolo_results = segment_model(img)
-            
-            best_prediction = None
-            best_confidence = 0.0
-            
-            if yolo_results[0].masks is not None:
-                masks = yolo_results[0].masks.data.cpu().numpy()
-                boxes = yolo_results[0].boxes.xyxy.cpu().numpy()
-                
-                for mask, box in zip(masks, boxes):
-                    x1, y1, x2, y2 = map(int, box)
-                    mask_resized = cv2.resize(mask, (img.shape[1], img.shape[0]))
-                    masked_img = cv2.bitwise_and(img, img, mask=(mask_resized * 255).astype(np.uint8))
-                    cropped = masked_img[y1:y2, x1:x2]
-                    
-                    if cropped.size == 0:
-                        continue
-                    
-                    cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-                    pil_img = Image.fromarray(cropped_rgb)
-                    predictions = disease_classifier(pil_img)
-                    
-                    label = predictions[0]['label']
-                    confidence = predictions[0]['score']
-                    
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_prediction = label
-            else:
-                # Classify full image if no objects found
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                pil_img = Image.fromarray(img_rgb)
-                predictions = disease_classifier(pil_img)
-                best_prediction = predictions[0]['label']
-                best_confidence = predictions[0]['score']
-            
-            if best_prediction:
-                is_correct = (best_prediction == expected_disease)
-                result = {
-                    'expected': expected_disease,
-                    'predicted': best_prediction,
-                    'confidence': best_confidence * 100,
-                    'correct': is_correct,
-                    'file': img_path.name
+    return False
+
+
+def run_validation(
+    dataset_dir: Path,
+    detector: PlantHealthDetector,
+    csv_output: Path
+) -> Dict[str, Any]:
+    """Execute complete validation run over dataset_dir folders."""
+    print("=" * 80)
+    print("       🌱 AGRO HOME SYSTEM - ВАЛИДАЦИЯ ТОЧНОСТИ МОДЕЛИ 🌱")
+    print("=" * 80)
+    print(f"Директория датасета: {dataset_dir}")
+    print(f"Движок классификации: {detector.classifier.engine_type.upper()}")
+    print("-" * 80)
+
+    image_exts = [".jpg", ".jpeg", ".png", ".bmp", ".webp"]
+    folder_results: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    all_results: List[Dict[str, Any]] = []
+
+    total_time_ms = 0.0
+
+    folders = [f for f in dataset_dir.iterdir() if f.is_dir()]
+    if not folders:
+        print(f"[ВНИМАНИЕ] В {dataset_dir} не найдены подпапки с классами.")
+        return {"total": 0, "accuracy": 0.0}
+
+    print(f"{'Класс / Папка':<25} | {'Файл':<22} | {'Предсказание':<30} | {'Статус':<6} | {'Время'}")
+    print("-" * 80)
+
+    for folder in sorted(folders, key=lambda x: x.name):
+        expected_class = folder.name
+        images = [p for p in folder.glob("*") if p.suffix.lower() in image_exts]
+
+        if not images:
+            continue
+
+        for img_path in sorted(images, key=lambda x: x.name):
+            try:
+                frame = cv2.imread(str(img_path))
+                if frame is None:
+                    continue
+
+                diag = detector.diagnose(frame)
+                total_time_ms += diag.processing_time_ms
+
+                is_correct = matches_expected(diag.raw_label, expected_class)
+                status_str = "PASS ✓" if is_correct else "FAIL ✗"
+
+                short_pred = f"{diag.crop_ru} - {diag.disease_ru}"
+                if len(short_pred) > 28:
+                    short_pred = short_pred[:26] + ".."
+
+                print(f"{expected_class:<25} | {img_path.name:<22} | {short_pred:<30} | {status_str:<6} | {diag.processing_time_ms:.1f} мс")
+
+                row = {
+                    "folder": expected_class,
+                    "file": img_path.name,
+                    "predicted_raw": diag.raw_label,
+                    "predicted_ru": f"{diag.crop_ru}: {diag.disease_ru}",
+                    "confidence_%": f"{diag.confidence:.2f}",
+                    "health_index_%": f"{diag.health_index:.1f}",
+                    "correct": is_correct,
+                    "latency_ms": f"{diag.processing_time_ms:.1f}"
                 }
-                test_results.append(result)
-                all_predictions.append(best_prediction)
-                
-                status = "PASS" if is_correct else "FAIL"
-                print(f"  [{status}] {img_path.name}: {best_prediction} ({best_confidence*100:.1f}%)")
-        
-        except Exception as e:
-            print(f"  [ERROR] {img_path.name}: {str(e)[:50]}")
+                folder_results[expected_class].append(row)
+                all_results.append(row)
 
-# Calculate accuracy metrics
-print("\n" + "=" * 70)
-print("VALIDATION RESULTS")
-print("=" * 70)
+            except Exception as e:
+                print(f"{expected_class:<25} | {img_path.name:<22} | ОШИБКА: {str(e)[:25]}")
 
-if test_results:
-    total = len(test_results)
-    correct = sum(1 for r in test_results if r['correct'])
-    accuracy = correct / total * 100
-    
-    print(f"\nOverall Accuracy: {accuracy:.1f}% ({correct}/{total})")
-    
-    # Per-class accuracy
-    print("\nPer-Class Results:")
-    for disease in expected_diseases.keys():
-        results_for_disease = [r for r in test_results if r['expected'] == disease]
-        if results_for_disease:
-            correct_for_disease = sum(1 for r in results_for_disease if r['correct'])
-            accuracy_for_disease = correct_for_disease / len(results_for_disease) * 100
-            print(f"  {disease}: {accuracy_for_disease:.1f}% ({correct_for_disease}/{len(results_for_disease)})")
-    
-    # Save results to CSV
-    csv_file = "validation_results.csv"
-    with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['file', 'expected', 'predicted', 'confidence', 'correct'])
+    print("=" * 80)
+
+    # Calculate overall and per-class metrics
+    total_samples = len(all_results)
+    correct_samples = sum(1 for r in all_results if r["correct"])
+    overall_acc = (correct_samples / total_samples * 100.0) if total_samples > 0 else 0.0
+    avg_speed = (total_time_ms / total_samples) if total_samples > 0 else 0.0
+
+    print("\n--- РЕЗУЛЬТАТЫ ВАЛИДАЦИИ ПО КЛАССАМ ---")
+    for cls_name, rows in folder_results.items():
+        n_cls = len(rows)
+        n_correct = sum(1 for r in rows if r["correct"])
+        cls_acc = (n_correct / n_cls * 100.0) if n_cls > 0 else 0.0
+        print(f"  • {cls_name:<25}: {cls_acc:5.1f}% ({n_correct}/{n_cls})")
+
+    print("-" * 80)
+    print(f"ОБЩАЯ ТОЧНОСТЬ (ACCURACY): {overall_acc:.2f}% ({correct_samples}/{total_samples})")
+    print(f"СРЕДНЯЯ СКОРОСТЬ:           {avg_speed:.2f} мс / кадр ({1000.0/max(avg_speed, 0.1):.1f} FPS)")
+    print(f"СУММАРНОЕ ВРЕМЯ ТЕСТА:     {total_time_ms/1000.0:.2f} сек")
+    print("=" * 80)
+
+    # Save to CSV
+    with open(csv_output, "w", newline="", encoding="utf-8") as f:
+        fieldnames = ["folder", "file", "predicted_raw", "predicted_ru", "confidence_%", "health_index_%", "correct", "latency_ms"]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(test_results)
-    
-    print(f"\nResults saved to: {csv_file}")
-else:
-    print("\nNo test images found in validation_dataset/")
-    print("Please add images to validation_dataset/[Disease]/ folders")
+        writer.writerows(all_results)
 
-print("\n" + "=" * 70)
+    print(f"\n[OK] Результаты валидации сохранены в: {csv_output}\n")
+    return {
+        "total": total_samples,
+        "correct": correct_samples,
+        "accuracy": overall_acc,
+        "avg_latency_ms": avg_speed
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="AgroHomeSystem - Model Accuracy Validation")
+    parser.add_argument("--dataset", "-d", type=str, default="validation_dataset", help="Dataset directory")
+    parser.add_argument("--output", "-o", type=str, default="validation_results.csv", help="Output CSV report")
+    parser.add_argument("--backend", "-b", type=str, default="auto", choices=["auto", "onnx", "opencv_dnn", "torchscript", "transformers"])
+    parser.add_argument("--threads", "-t", type=int, default=4, help="CPU threads (default: 4 for RPi 4)")
+    args = parser.parse_args()
+
+    dataset_path = Path(args.dataset)
+    if not dataset_path.exists():
+        print(f"[ОШИБКА] Директория датасета не найдена: {dataset_path}")
+        sys.exit(1)
+
+    detector = PlantHealthDetector(backend=args.backend, num_threads=args.threads)
+    run_validation(dataset_path, detector, Path(args.output))
+
+
+if __name__ == "__main__":
+    main()
