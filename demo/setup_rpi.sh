@@ -23,7 +23,6 @@ apt-get install -y --no-install-recommends \
     python3-dev \
     python3-numpy \
     libopencv-dev \
-    libatlas-base-dev \
     libopenblas-dev \
     v4l-utils \
     libcamera-tools
@@ -50,8 +49,9 @@ chmod +x /etc/profile.d/agro_rpi_env.sh
 
 # 4. Lightweight Python Dependencies (without heavy PyTorch/CUDA wheels)
 echo -e "\n[3/5] Установка легковесного ML-стека (ONNX Runtime ARM NEON + OpenCV)..."
-pip3 install --upgrade pip
-pip3 install \
+PIP_FLAGS="--break-system-packages"
+pip3 install --upgrade pip $PIP_FLAGS || true
+pip3 install $PIP_FLAGS \
     onnxruntime \
     opencv-python-headless \
     numpy \

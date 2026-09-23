@@ -127,9 +127,194 @@ void applyTheme(ColorTheme t) {
   }
 }
 
+// ==========================================
+// ЛОКАЛИЗАЦИЯ И ВЫБОР ЯЗЫКА
+// ==========================================
+enum AppLanguage {
+  LANG_EN = 0,
+  LANG_RU = 1
+};
+
+AppLanguage currentLang = LANG_RU;
+
+inline const char* tr(const char* en, const char* ru) {
+  return (currentLang == LANG_RU) ? ru : en;
+}
+
+// ==========================================
+// ШРИФТ 5x7 ДЛЯ КИРИЛЛИЦЫ UTF-8 (ILI9341)
+// ==========================================
+// 66 символов русского алфавита (33 заглавных + 33 строчных)
+// Формат: 5 байт на символ (колонки 0..4, LSB вверху - bit0: строка 0 .. bit6: строка 6)
+static const uint8_t cyrillic_glyphs[66][5] PROGMEM = {
+  // Заглавные буквы (0..31: А..Я, 32: Ё)
+  { 0x7E, 0x11, 0x11, 0x11, 0x7E }, // 0:  А
+  { 0x7F, 0x49, 0x49, 0x49, 0x31 }, // 1:  Б
+  { 0x7F, 0x49, 0x49, 0x49, 0x36 }, // 2:  В
+  { 0x7F, 0x01, 0x01, 0x01, 0x01 }, // 3:  Г
+  { 0x60, 0x3F, 0x21, 0x3F, 0x60 }, // 4:  Д
+  { 0x7F, 0x49, 0x49, 0x49, 0x41 }, // 5:  Е
+  { 0x49, 0x2A, 0x7F, 0x2A, 0x49 }, // 6:  Ж
+  { 0x22, 0x41, 0x49, 0x49, 0x36 }, // 7:  З
+  { 0x7F, 0x10, 0x08, 0x04, 0x7F }, // 8:  И
+  { 0x7E, 0x13, 0x08, 0x07, 0x7E }, // 9:  Й
+  { 0x7F, 0x08, 0x14, 0x22, 0x41 }, // 10: К
+  { 0x60, 0x3E, 0x01, 0x7F, 0x40 }, // 11: Л
+  { 0x7F, 0x02, 0x0C, 0x02, 0x7F }, // 12: М
+  { 0x7F, 0x08, 0x08, 0x08, 0x7F }, // 13: Н
+  { 0x3E, 0x41, 0x41, 0x41, 0x3E }, // 14: О
+  { 0x7F, 0x01, 0x01, 0x01, 0x7F }, // 15: П
+  { 0x7F, 0x09, 0x09, 0x09, 0x06 }, // 16: Р
+  { 0x3E, 0x41, 0x41, 0x41, 0x22 }, // 17: С
+  { 0x01, 0x01, 0x7F, 0x01, 0x01 }, // 18: Т
+  { 0x03, 0x04, 0x78, 0x04, 0x03 }, // 19: У
+  { 0x1C, 0x22, 0x7F, 0x22, 0x1C }, // 20: Ф
+  { 0x63, 0x14, 0x08, 0x14, 0x63 }, // 21: Х
+  { 0x7F, 0x40, 0x40, 0x7F, 0x60 }, // 22: Ц
+  { 0x0F, 0x08, 0x08, 0x08, 0x7F }, // 23: Ч
+  { 0x7F, 0x40, 0x7F, 0x40, 0x7F }, // 24: Ш
+  { 0x7F, 0x40, 0x7F, 0x40, 0xFF }, // 25: Щ
+  { 0x01, 0x7F, 0x48, 0x48, 0x30 }, // 26: Ъ
+  { 0x7F, 0x48, 0x48, 0x30, 0x7F }, // 27: Ы
+  { 0x7F, 0x48, 0x48, 0x48, 0x30 }, // 28: Ь
+  { 0x22, 0x41, 0x49, 0x49, 0x3E }, // 29: Э
+  { 0x7F, 0x08, 0x3E, 0x41, 0x3E }, // 30: Ю
+  { 0x46, 0x29, 0x19, 0x09, 0x7F }, // 31: Я
+  { 0x7E, 0x4B, 0x4A, 0x4B, 0x42 }, // 32: Ё
+
+  // Строчные буквы (33..64: а..я, 65: ё)
+  { 0x20, 0x54, 0x54, 0x54, 0x78 }, // 33: а
+  { 0x3C, 0x4A, 0x49, 0x49, 0x30 }, // 34: б
+  { 0x7C, 0x54, 0x54, 0x54, 0x28 }, // 35: в
+  { 0x7C, 0x04, 0x04, 0x04, 0x04 }, // 36: г
+  { 0x60, 0x3C, 0x24, 0x3C, 0x60 }, // 37: д
+  { 0x38, 0x54, 0x54, 0x54, 0x18 }, // 38: е
+  { 0x48, 0x28, 0x7C, 0x28, 0x48 }, // 39: ж
+  { 0x24, 0x44, 0x44, 0x54, 0x28 }, // 40: з
+  { 0x7C, 0x10, 0x08, 0x04, 0x7C }, // 41: и
+  { 0x7C, 0x12, 0x09, 0x06, 0x7C }, // 42: й
+  { 0x7C, 0x10, 0x28, 0x44, 0x00 }, // 43: к
+  { 0x60, 0x38, 0x04, 0x7C, 0x40 }, // 44: л
+  { 0x7C, 0x08, 0x10, 0x08, 0x7C }, // 45: м
+  { 0x7C, 0x10, 0x10, 0x10, 0x7C }, // 46: н
+  { 0x38, 0x44, 0x44, 0x44, 0x38 }, // 47: о
+  { 0x7C, 0x04, 0x04, 0x04, 0x7C }, // 48: п
+  { 0xFC, 0x24, 0x24, 0x24, 0x18 }, // 49: р
+  { 0x38, 0x44, 0x44, 0x44, 0x20 }, // 50: с
+  { 0x04, 0x04, 0x7C, 0x04, 0x04 }, // 51: т
+  { 0x0C, 0x50, 0x50, 0x50, 0x3C }, // 52: у
+  { 0x18, 0x24, 0x7E, 0x24, 0x18 }, // 53: ф
+  { 0x44, 0x28, 0x10, 0x28, 0x44 }, // 54: х
+  { 0x7C, 0x40, 0x40, 0x7C, 0x60 }, // 55: ц
+  { 0x1C, 0x10, 0x10, 0x10, 0x7C }, // 56: ч
+  { 0x7C, 0x40, 0x7C, 0x40, 0x7C }, // 57: ш
+  { 0x7C, 0x40, 0x7C, 0x40, 0xFC }, // 58: щ
+  { 0x04, 0x7C, 0x50, 0x50, 0x20 }, // 59: ъ
+  { 0x7C, 0x50, 0x50, 0x20, 0x7C }, // 60: ы
+  { 0x7C, 0x50, 0x50, 0x50, 0x20 }, // 61: ь
+  { 0x28, 0x44, 0x54, 0x54, 0x38 }, // 62: э
+  { 0x7C, 0x10, 0x38, 0x44, 0x38 }, // 63: ю
+  { 0x48, 0x34, 0x14, 0x14, 0x7C }, // 64: я
+  { 0x38, 0x56, 0x54, 0x56, 0x18 }  // 65: ё
+};
+
+// ==========================================
+// КЛАСС ДИСПЛЕЯ С ПОДДЕРЖКОЙ КИРИЛЛИЦЫ UTF-8
+// ==========================================
+class AgroDisplay : public Adafruit_ILI9341 {
+public:
+  AgroDisplay(SPIClass *spiClass, int8_t dc, int8_t cs = -1, int8_t rst = -1)
+    : Adafruit_ILI9341(spiClass, dc, cs, rst), utf8_lead(0) {}
+
+  virtual size_t write(uint8_t c) override {
+    if (utf8_lead == 0) {
+      if (c == 0xD0 || c == 0xD1) {
+        utf8_lead = c;
+        return 1;
+      }
+      return Adafruit_ILI9341::write(c);
+    }
+
+    uint8_t b1 = utf8_lead;
+    uint8_t b2 = c;
+    utf8_lead = 0;
+
+    int idx = -1;
+    if (b1 == 0xD0) {
+      if (b2 >= 0x90 && b2 <= 0xAF) {
+        idx = b2 - 0x90; // 0..31: А..Я
+      } else if (b2 == 0x81) {
+        idx = 32;        // Ё
+      } else if (b2 >= 0xB0 && b2 <= 0xBF) {
+        idx = 33 + (b2 - 0xB0); // 33..48: а..п
+      }
+    } else if (b1 == 0xD1) {
+      if (b2 >= 0x80 && b2 <= 0x8F) {
+        idx = 49 + (b2 - 0x80); // 49..64: р..я
+      } else if (b2 == 0x91) {
+        idx = 65;        // ё
+      }
+    }
+
+    if (idx >= 0 && idx < 66) {
+      if (wrap && ((cursor_x + textsize_x * 6) > _width)) {
+        cursor_x = 0;
+        cursor_y += textsize_y * 8;
+      }
+      startWrite();
+      for (int8_t i = 0; i < 5; i++) {
+        uint8_t line = pgm_read_byte(&cyrillic_glyphs[idx][i]);
+        for (int8_t j = 0; j < 8; j++, line >>= 1) {
+          if (line & 1) {
+            if (textsize_x == 1 && textsize_y == 1) {
+              writePixel(cursor_x + i, cursor_y + j, textcolor);
+            } else {
+              writeFillRect(cursor_x + i * textsize_x, cursor_y + j * textsize_y, textsize_x, textsize_y, textcolor);
+            }
+          } else if (textbgcolor != textcolor) {
+            if (textsize_x == 1 && textsize_y == 1) {
+              writePixel(cursor_x + i, cursor_y + j, textbgcolor);
+            } else {
+              writeFillRect(cursor_x + i * textsize_x, cursor_y + j * textsize_y, textsize_x, textsize_y, textbgcolor);
+            }
+          }
+        }
+      }
+      if (textbgcolor != textcolor) {
+        if (textsize_x == 1 && textsize_y == 1) {
+          writeFastVLine(cursor_x + 5, cursor_y, 8, textbgcolor);
+        } else {
+          writeFillRect(cursor_x + 5 * textsize_x, cursor_y, textsize_x, 8 * textsize_y, textbgcolor);
+        }
+      }
+      endWrite();
+      cursor_x += textsize_x * 6;
+      return 1;
+    }
+
+    return Adafruit_ILI9341::write('?');
+  }
+
+private:
+  uint8_t utf8_lead;
+};
+
+// Подсчет количества визуальных символов UTF-8 (для точного центрирования)
+inline size_t utf8_char_count(const char* s) {
+  if (!s) return 0;
+  size_t count = 0;
+  while (*s) {
+    if ((*((const uint8_t*)s) & 0xC0) != 0x80) {
+      count++;
+    }
+    s++;
+  }
+  return count;
+}
+
 SPIClass tftSPI = SPIClass(HSPI);
 SPIClass touchSPI = SPIClass(FSPI);
-Adafruit_ILI9341 tft = Adafruit_ILI9341(&tftSPI, TFT_DC, TFT_CS, TFT_RST);
+AgroDisplay tft(&tftSPI, TFT_DC, TFT_CS, TFT_RST);
 XPT2046_Touchscreen ts(TOUCH_CS);
 Preferences prefs;
 
@@ -319,7 +504,7 @@ int sproutAgeDays = 5;
 int currentWisdomIndex = 0;
 int highScoreGame = 0;       // Личный рекорд в мини-игре
 
-const char* agroWisdomQuotes[] = {
+const char* agroWisdomQuotesEN[] = {
   "VPD is optimal! Stomata wide open.",
   "Photosynthesis at 99.4% peak rate!",
   "Clean roots, pure ions, top energy!",
@@ -328,6 +513,17 @@ const char* agroWisdomQuotes[] = {
   "Mmm, fresh water stream feels great!",
   "Quantum LED spectrum is wonderful!",
   "Root ecosystem is 100% healthy!"
+};
+
+const char* agroWisdomQuotesRU[] = {
+  "VPD в норме! Устьица открыты.",
+  "Фотосинтез на пике: 99.4% мощности!",
+  "Чистые корни, ионы, максимум сил!",
+  "Вода 22C дает корням много O2.",
+  "pH в точке оптимума! Питание идет.",
+  "Ммм, свежий поток воды прекрасен!",
+  "Спектр фитолампы идеален для роста!",
+  "Корневая зона на 100% здорова!"
 };
 #define WISDOM_COUNT 8
 
@@ -401,6 +597,8 @@ void iconCrown(int cx, int cy, uint16_t color);
 void animatePumpFlow();
 void saveThemePreference();
 void loadThemePreference();
+void saveLanguagePreference();
+void loadLanguagePreference();
 
 // ==========================================
 // УПРАВЛЕНИЕ ЯРКОСТЬЮ (HARDWARE PWM)
@@ -464,6 +662,19 @@ void loadThemePreference() {
   uint8_t t = prefs.getUChar("theme", 0);
   prefs.end();
   applyTheme((ColorTheme)t);
+}
+
+void saveLanguagePreference() {
+  prefs.begin("locale", false);
+  prefs.putUChar("lang", (uint8_t)currentLang);
+  prefs.end();
+}
+
+void loadLanguagePreference() {
+  prefs.begin("locale", true);
+  uint8_t l = prefs.getUChar("lang", (uint8_t)LANG_RU);
+  prefs.end();
+  currentLang = (l <= 1) ? (AppLanguage)l : LANG_RU;
 }
 
 // ==========================================
@@ -586,7 +797,7 @@ void drawPill(int x, int y, int w, int h, const char* text, uint16_t fg, uint16_
   if (border != 0) tft.drawRoundRect(x, y, w, h, h / 2, border);
   tft.setTextSize(1);
   tft.setTextColor(fg);
-  int textLen = strlen(text) * 6;
+  int textLen = utf8_char_count(text) * 6;
   tft.setCursor(x + (w - textLen) / 2, y + (h - 8) / 2);
   tft.print(text);
 }
@@ -628,35 +839,48 @@ void drawSparkline(int x, int y, int w, int h, float *history, int count, uint16
   tft.fillCircle(prevX, prevY, 2, theme.txtMain);
 }
 
-// Автоматический перенос текста по словам внутри заданной ширины
+// Автоматический перенос текста по словам внутри заданной ширины (с поддержкой UTF-8)
 void drawWrappedText(const char* text, int x, int y, int maxW, int lineSpacing, int maxLines, uint16_t color) {
   tft.setTextSize(1);
   tft.setTextColor(color);
-  int curX = x;
-  int curY = y;
   int line = 0;
   int maxChars = maxW / 6;
+  const char* p = text;
 
-  String str = String(text);
-  int start = 0;
-  int len = str.length();
-  while (start < len && line < maxLines) {
-    int end = start + maxChars;
-    if (end >= len) {
-      end = len;
-    } else {
-      int lastSpace = str.lastIndexOf(' ', end);
-      if (lastSpace > start) {
-        end = lastSpace;
+  while (*p && line < maxLines) {
+    while (*p == ' ') p++;
+    if (!*p) break;
+
+    const char* lineStart = p;
+    const char* lastSpace = nullptr;
+    int charCount = 0;
+
+    while (*p && *p != '\n') {
+      if (*p == ' ') lastSpace = p;
+      if ((*((const uint8_t*)p) & 0xC0) != 0x80) {
+        if (charCount >= maxChars) {
+          if (lastSpace && lastSpace > lineStart) {
+            p = lastSpace;
+          }
+          break;
+        }
+        charCount++;
       }
+      p++;
     }
-    String lineStr = str.substring(start, end);
-    lineStr.trim();
-    tft.setCursor(curX, curY + line * lineSpacing);
-    tft.print(lineStr);
+
+    int byteLen = p - lineStart;
+    char lineBuf[128];
+    if (byteLen >= (int)sizeof(lineBuf)) byteLen = sizeof(lineBuf) - 1;
+    memcpy(lineBuf, lineStart, byteLen);
+    lineBuf[byteLen] = '\0';
+
+    tft.setCursor(x, y + line * lineSpacing);
+    tft.print(lineBuf);
     line++;
-    start = end;
-    while (start < len && str.charAt(start) == ' ') start++;
+
+    if (*p == ' ') p++;
+    else if (*p == '\n') p++;
   }
 }
 
@@ -874,7 +1098,8 @@ void drawMinimalHeader(const char* title, bool showBack = false) {
     bool aiActive = isAiConnected();
     int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
     uint16_t badgeColor = (health >= 85) ? theme.ok : (health >= 65 ? theme.warn : theme.alert);
-    String healthStr = (aiActive ? "AI " : "") + String(health) + "% " + (health >= 85 ? "PRIME" : (health >= 65 ? "FAIR" : "ATTN"));
+    const char* hStatus = (health >= 85 ? tr("PRIME", "НОРМА") : (health >= 65 ? tr("FAIR", "ВНИМ") : tr("ATTN", "СБОЙ")));
+    String healthStr = (aiActive ? "AI " : "") + String(health) + "% " + hStatus;
     drawPill(118, 8, 92, 20, healthStr.c_str(), badgeColor, theme.surfaceHi, aiActive ? theme.primary : theme.border);
 
     // Uptime & CPU Temp HUD
@@ -897,37 +1122,47 @@ void drawMinimalHeader(const char* title, bool showBack = false) {
   }
 }
 
-// 3-вкладочная навигационная панель: [MONITOR] [SPROUT] [SETTINGS]
+// 3-вкладочная навигационная панель: [MONITOR/МОНИТОР] [SPROUT/РОСТОК] [SETTINGS/НАСТРОЙКИ]
 void drawBottomTabs(int activeTab) {
   int tabY = SCREEN_H - NAV_H;
   tft.fillRect(0, tabY, SCREEN_W, NAV_H, theme.bg);
   tft.drawFastHLine(0, tabY, SCREEN_W, theme.border);
 
-  // Таб 0: MONITOR
+  // Таб 0: MONITOR / МОНИТОР
   bool isMon = (activeTab == 0);
   uint16_t colMon = isMon ? theme.primary : theme.txtDim;
+  const char* txtMon = tr("MONITOR", "МОНИТОР");
+  int wMon = utf8_char_count(txtMon) * 6;
   tft.setTextSize(1);
   tft.setTextColor(colMon);
-  tft.setCursor(28, tabY + 14);
-  tft.print("MONITOR");
-  if (isMon) tft.fillRoundRect(24, tabY + 28, 52, 3, 1, theme.primary);
+  tft.setCursor(53 - wMon / 2, tabY + 14);
+  tft.print(txtMon);
+  if (isMon) tft.fillRoundRect(53 - (wMon + 12) / 2, tabY + 28, wMon + 12, 3, 1, theme.primary);
 
-  // Таб 1: SPROUT (Тамагочи)
+  // Таб 1: SPROUT / РОСТОК (Тамагочи)
   bool isSprout = (activeTab == 1);
   uint16_t colSprout = isSprout ? theme.primary : theme.txtDim;
+  const char* txtSprout = tr("SPROUT", "РОСТОК");
+  int wSprout = utf8_char_count(txtSprout) * 6;
+  int centerSprout = 160;
+  int totalSproutW = 14 + wSprout;
+  int startSproutX = centerSprout - totalSproutW / 2;
+  iconLeaf(startSproutX + 4, tabY + 18, isSprout ? theme.primary : theme.txtDim);
   tft.setTextColor(colSprout);
-  iconLeaf(142, tabY + 18, isSprout ? theme.primary : theme.txtDim);
-  tft.setCursor(154, tabY + 14);
-  tft.print("SPROUT");
-  if (isSprout) tft.fillRoundRect(136, tabY + 28, 56, 3, 1, theme.primary);
+  tft.setCursor(startSproutX + 14, tabY + 14);
+  tft.print(txtSprout);
+  if (isSprout) tft.fillRoundRect(centerSprout - (totalSproutW + 10) / 2, tabY + 28, totalSproutW + 10, 3, 1, theme.primary);
 
-  // Таб 2: SETTINGS
+  // Таб 2: SETTINGS / НАСТРОЙКИ
   bool isSet = (activeTab == 2);
   uint16_t colSet = isSet ? theme.primary : theme.txtDim;
+  const char* txtSet = tr("SETTINGS", "НАСТРОЙКИ");
+  int wSet = utf8_char_count(txtSet) * 6;
+  int centerSet = 267;
   tft.setTextColor(colSet);
-  tft.setCursor(244, tabY + 14);
-  tft.print("SETTINGS");
-  if (isSet) tft.fillRoundRect(240, tabY + 28, 56, 3, 1, theme.primary);
+  tft.setCursor(centerSet - wSet / 2, tabY + 14);
+  tft.print(txtSet);
+  if (isSet) tft.fillRoundRect(centerSet - (wSet + 12) / 2, tabY + 28, wSet + 12, 3, 1, theme.primary);
 }
 
 // ==========================================
@@ -960,27 +1195,27 @@ void animatePumpFlow() {
 void getMetricMeta(MetricType type, String &title, String &unit, float &val, float &minOk, float &maxOk, int &decimals) {
   switch (type) {
     case METRIC_PH:
-      title = "pH LEVEL"; unit = "pH"; val = current_pH;
+      title = tr("pH LEVEL", "УРОВЕНЬ pH"); unit = "pH"; val = current_pH;
       minOk = PH_MIN_OK; maxOk = PH_MAX_OK; decimals = 1;
       break;
     case METRIC_TDS:
-      title = "NUTRIENTS (TDS)"; unit = "ppm"; val = (float)current_TDS;
+      title = tr("NUTRIENTS (TDS)", "ПИТАНИЕ (TDS)"); unit = "ppm"; val = (float)current_TDS;
       minOk = TDS_MIN_OK; maxOk = TDS_MAX_OK; decimals = 0;
       break;
     case METRIC_WATER_TEMP:
-      title = "WATER TEMP"; unit = "C"; val = current_waterTemp;
+      title = tr("WATER TEMP", "ТЕМП. ВОДЫ"); unit = "C"; val = current_waterTemp;
       minOk = WT_MIN_OK; maxOk = WT_MAX_OK; decimals = 1;
       break;
     case METRIC_AIR_TEMP:
-      title = "AIR TEMP"; unit = "C"; val = current_airTemp;
+      title = tr("AIR TEMP", "ТЕМП. ВОЗДУХА"); unit = "C"; val = current_airTemp;
       minOk = AT_MIN_OK; maxOk = AT_MAX_OK; decimals = 1;
       break;
     case METRIC_HUMIDITY:
-      title = "HUMIDITY"; unit = "%"; val = current_humidity;
+      title = tr("HUMIDITY", "ВЛАЖНОСТЬ"); unit = "%"; val = current_humidity;
       minOk = HUM_MIN_OK; maxOk = HUM_MAX_OK; decimals = 0;
       break;
     case METRIC_VPD:
-      title = "VPD (DEFICIT)"; unit = "kPa"; val = current_VPD;
+      title = tr("VPD (DEFICIT)", "VPD (ДЕФИЦИТ)"); unit = "kPa"; val = current_VPD;
       minOk = VPD_MIN_OK; maxOk = VPD_MAX_OK; decimals = 2;
       break;
   }
@@ -1006,7 +1241,7 @@ void drawDetailScreen() {
   tft.setCursor(38, 10);
   tft.print(title);
 
-  drawPill(238, 8, 72, 20, isOk ? "OPTIMAL" : "ATTENTION", isOk ? theme.ok : theme.warn, theme.surfaceHi);
+  drawPill(234, 8, 78, 20, isOk ? tr("OPTIMAL", "НОРМА") : tr("ATTENTION", "ВНИМАНИЕ"), isOk ? theme.ok : theme.warn, theme.surfaceHi);
 
   // 2. Статистика (Min, Max, Avg) по истории
   float minVal = 99999.0f, maxVal = -99999.0f, sumVal = 0.0f;
@@ -1064,7 +1299,7 @@ void drawDetailScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(12, tfY + 5);
-  tft.print("TIMEFRAME:");
+  tft.print(tr("TIMEFRAME:", "ПЕРИОД:"));
 
   const char* tfLabels[3] = { "1H", "6H", "24H" };
   for (int i = 0; i < 3; i++) {
@@ -1140,7 +1375,7 @@ void drawDetailScreen() {
   tft.setCursor(pX + pW / 2 - 12, pY + pH + 6);
   tft.print(tMid);
   tft.setCursor(pX + pW - 20, pY + pH + 6);
-  tft.print("Now");
+  tft.print(tr("Now", "Сейч"));
 }
 
 void appendMetricSample(MetricType type, float val) {
@@ -1304,7 +1539,7 @@ void drawSproutCharacter(int cx, int cy, int lvl, SproutMood mood) {
 // ==========================================
 void drawSproutScreen() {
   tft.fillScreen(theme.bg);
-  drawMinimalHeader("CYBER SPROUT", false);
+  drawMinimalHeader(tr("CYBER SPROUT", "КИБЕР-РОСТОК"), false);
 
   bool aiActive = isAiConnected();
   int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
@@ -1343,9 +1578,11 @@ void drawSproutScreen() {
   tft.setCursor(154, 50);
   tft.print(String(sproutXP) + "/" + String(xpMax));
 
-  const char* moodNames[] = { "THRIVING", "CONTENT", "NEEDS CARE", "IN LOVE!" };
+  const char* moodNamesEN[] = { "THRIVING", "CONTENT", "NEEDS CARE", "IN LOVE!" };
+  const char* moodNamesRU[] = { "ОТЛИЧНО", "ДОВОЛЕН", "ЖАЖДА", "СЧАСТЛИВ!" };
   uint16_t moodColors[] = { theme.ok, theme.primary, theme.alert, theme.accent };
-  drawPill(216, 44, 88, 20, moodNames[currentSproutMood], moodColors[currentSproutMood], theme.surfaceHi);
+  const char* moodText = (currentLang == LANG_RU) ? moodNamesRU[currentSproutMood] : moodNamesEN[currentSproutMood];
+  drawPill(216, 44, 88, 20, moodText, moodColors[currentSproutMood], theme.surfaceHi);
 
   // 2. Область персонажа (Слева, x: 8..144, y: 72..200)
   drawCard(8, 72, 138, 128, theme.surface, theme.border);
@@ -1357,10 +1594,11 @@ void drawSproutScreen() {
   tft.fillTriangle(153, 87, 153, 95, 147, 91, theme.surface);
 
   if (aiActive && aiDiagnosis.length() > 0) {
-    String bubbleMsg = aiCropName + ": " + aiDiagnosis + " (" + String((int)aiConfidence) + "%). Growth: " + String((int)aiGrowthProgress) + "%";
+    String bubbleMsg = aiCropName + ": " + aiDiagnosis + " (" + String((int)aiConfidence) + "%). " + tr("Growth: ", "Рост: ") + String((int)aiGrowthProgress) + "%";
     drawWrappedText(bubbleMsg.c_str(), 158, 78, 148, 10, 3, theme.txtMain);
   } else {
-    drawWrappedText(agroWisdomQuotes[currentWisdomIndex], 158, 78, 148, 10, 3, theme.txtMain);
+    const char* quote = (currentLang == LANG_RU) ? agroWisdomQuotesRU[currentWisdomIndex] : agroWisdomQuotesEN[currentWisdomIndex];
+    drawWrappedText(quote, 158, 78, 148, 10, 3, theme.txtMain);
   }
 
   // 4. Интерактивные кнопки действий питомца (Справа, y: 126..202)
@@ -1370,21 +1608,21 @@ void drawSproutScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(174, 133);
-  tft.print("PET SPROUT (+5XP)");
+  tft.print(tr("PET SPROUT (+5XP)", "ПОГЛАДИТЬ (+5XP)"));
 
   // Кнопка 2: [ 💧 ПОЛИТЬ / WATER & FEED ]
   drawCard(152, 152, 160, 23, theme.surfaceHi, theme.borderHi);
   drawVectorDrop(164, 163, 4, theme.secondary);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(174, 159);
-  tft.print("WATER & FEED (+10XP)");
+  tft.print(tr("WATER & FEED (+10XP)", "ПОЛИТЬ (+10XP)"));
 
   // Кнопка 3: [ 👁️ AI PLANT VISION > ]
   drawGlowCard(152, 178, 160, 24, theme.primary, theme.surfaceHi, theme.borderHi);
   iconDot(164, 190, 3, theme.primary);
   tft.setTextColor(theme.primary);
   tft.setCursor(174, 186);
-  tft.print("AI PLANT VISION >");
+  tft.print(tr("AI PLANT VISION >", "AI ЗРЕНИЕ >"));
 
   drawBottomTabs(1);
 }
@@ -1618,7 +1856,7 @@ void exitLampMode() {
 // ==========================================
 void drawAdvisorScreen() {
   tft.fillScreen(theme.bg);
-  drawMinimalHeader("AGRO ADVISOR", true);
+  drawMinimalHeader(tr("AGRO ADVISOR", "АГРО-СОВЕТНИК"), true);
 
   bool aiActive = isAiConnected();
   int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
@@ -1633,20 +1871,20 @@ void drawAdvisorScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(100, 50);
-  tft.print(aiActive ? "AI DIAG: " : "STATUS: ");
+  tft.print(aiActive ? tr("AI DIAG: ", "AI ДИАГНОЗ: ") : tr("STATUS: ", "СТАТУС: "));
   tft.setTextColor(hColor);
   if (aiActive) {
     tft.print(aiDiagnosis + " [" + aiStageName + "]");
   } else {
-    tft.print(health >= 85 ? "OPTIMAL ECOSYSTEM" : (health >= 65 ? "SLIGHT IMBALANCE" : "ATTENTION REQUIRED"));
+    tft.print(health >= 85 ? tr("OPTIMAL ECOSYSTEM", "ОПТИМАЛЬНАЯ СИСТЕМА") : (health >= 65 ? tr("SLIGHT IMBALANCE", "ЛЕГКИЙ ДИСБАЛАНС") : tr("ATTENTION REQUIRED", "ТРЕБУЕТ ВНИМАНИЯ")));
   }
 
   tft.setTextColor(theme.txtDim);
   tft.setCursor(100, 68);
   if (aiActive) {
-    tft.print("Growth: " + String((int)aiGrowthProgress) + "% | Biomass: " + String(aiBiomass, 1) + "%");
+    tft.print(tr("Growth: ", "Рост: ") + String((int)aiGrowthProgress) + "% | " + tr("Biomass: ", "Биомасса: ") + String(aiBiomass, 1) + "%");
   } else {
-    tft.print("VPD " + String(current_VPD, 2) + " kPa | Transpiration in zone");
+    tft.print("VPD " + String(current_VPD, 2) + " kPa | " + tr("Transpiration in zone", "Транспирация в норме"));
   }
 
   int cardY = 94;
@@ -1657,15 +1895,15 @@ void drawAdvisorScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(28, cardY + 8);
-  tft.print("NUTRIENT SOLUTION ABSORPTION");
+  tft.print(tr("NUTRIENT SOLUTION ABSORPTION", "УСВОЕНИЕ ПИТАТЕЛЬНЫХ ВЕЩЕСТВ"));
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(28, cardY + 22);
   if (current_pH > PH_MAX_OK) {
-    tft.print("pH is high (" + String(current_pH, 1) + "). Risk of iron lockout!");
+    tft.print(tr("pH is high. Risk of iron lockout!", "pH высокий. Блокировка железа!"));
   } else if (current_pH < PH_MIN_OK) {
-    tft.print("pH is low (" + String(current_pH, 1) + "). Risk of calcium deficiency!");
+    tft.print(tr("pH is low. Risk of calcium deficiency!", "pH низкий. Дефицит кальция!"));
   } else {
-    tft.print("pH " + String(current_pH, 1) + " is optimal for N-P-K micronutrients.");
+    tft.print(tr("pH optimal for N-P-K micronutrients.", "pH идеален для усвоения N-P-K."));
   }
 
   // Совет 2: Корневая зона и температура воды
@@ -1676,13 +1914,13 @@ void drawAdvisorScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(28, cardY + 8);
-  tft.print("ROOT OXYGENATION & DISEASE RISK");
+  tft.print(tr("ROOT OXYGENATION & HEALTH", "КИСЛОРОД И ЗДОРОВЬЕ КОРНЕЙ"));
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(28, cardY + 22);
   if (current_waterTemp > WT_MAX_OK) {
-    tft.print("High water temp (" + String(current_waterTemp, 1) + "C). Lower dissolved O2!");
+    tft.print(tr("High water temp. Lower dissolved O2!", "Теплая вода. Падает растворенный O2!"));
   } else {
-    tft.print("Water temp " + String(current_waterTemp, 1) + "C: Healthy root respiration.");
+    tft.print(tr("Water temp optimal for root respiration.", "Температура воды идеальна для корней."));
   }
 
   // Совет 3: VPD и климат
@@ -1693,15 +1931,15 @@ void drawAdvisorScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(28, cardY + 8);
-  tft.print("TRANSPIRATION (VPD)");
+  tft.print(tr("TRANSPIRATION (VPD)", "ТРАНСПИРАЦИЯ (VPD)"));
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(28, cardY + 22);
   if (current_VPD < VPD_MIN_OK) {
-    tft.print("Low VPD (" + String(current_VPD, 2) + " kPa). Stomata close, fungal risk!");
+    tft.print(tr("Low VPD: stomata close, fungal risk!", "Низкий VPD: риск развития грибков!"));
   } else if (current_VPD > VPD_MAX_OK) {
-    tft.print("High VPD (" + String(current_VPD, 2) + " kPa). Water stress on foliage!");
+    tft.print(tr("High VPD: water stress on foliage!", "Высокий VPD: водный стресс листьев!"));
   } else {
-    tft.print("VPD " + String(current_VPD, 2) + " kPa: Maximum photosynthate transport.");
+    tft.print(tr("Optimal VPD: peak photosynthate flow.", "Оптимальный VPD: активный рост."));
   }
 }
 
@@ -1710,7 +1948,7 @@ void drawAdvisorScreen() {
 // ==========================================
 void drawVisionScreen() {
   tft.fillScreen(theme.bg);
-  drawMinimalHeader("AI PLANT VISION", true);
+  drawMinimalHeader(tr("AI PLANT VISION", "AI ЗРЕНИЕ"), true);
 
   bool aiActive = isAiConnected();
   int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
@@ -1722,7 +1960,7 @@ void drawVisionScreen() {
     iconDot(14, 45, 3, theme.ok);
     tft.setTextColor(theme.ok);
     tft.setCursor(24, 42);
-    tft.print("RPi 4B EDGE AI ONLINE");
+    tft.print(tr("RPi 4B EDGE AI ONLINE", "RPi 4B AI НА СВЯЗИ"));
 
     tft.setTextColor(theme.txtDim);
     tft.setCursor(174, 42);
@@ -1731,11 +1969,11 @@ void drawVisionScreen() {
     iconDot(14, 45, 3, theme.warn);
     tft.setTextColor(theme.warn);
     tft.setCursor(24, 42);
-    tft.print("STANDBY: AUTONOMOUS SENSORS");
+    tft.print(tr("STANDBY: AUTONOMOUS SENSORS", "АВТОНОМНЫЕ ДАТЧИКИ"));
 
     tft.setTextColor(theme.txtDim);
     tft.setCursor(200, 42);
-    tft.print("USB/WiFi IDLE");
+    tft.print(tr("USB/WiFi IDLE", "СВЯЗЬ ЖДЕТ"));
   }
 
   // Ряд 1: Здоровье AI (слева) и Культура / Диагноз (справа) (y: 54..108)
@@ -1743,7 +1981,7 @@ void drawVisionScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(16, 60);
-  tft.print("AI HEALTH");
+  tft.print(tr("AI HEALTH", "AI ЗДОРОВЬЕ"));
 
   tft.setTextSize(3);
   tft.setTextColor(hColor);
@@ -1754,30 +1992,31 @@ void drawVisionScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(142, 60);
-  tft.print("CROP: ");
+  tft.print(tr("CROP: ", "КУЛЬТУРА: "));
   tft.setTextColor(theme.txtMain);
-  tft.print(aiActive ? aiCropName : "Agro Culture");
+  tft.print(aiActive ? aiCropName : tr("Agro Culture", "Агро-культура"));
 
   tft.setCursor(142, 73);
   tft.setTextColor(hColor);
-  String diagStr = aiActive ? (aiDiagnosis + " (" + String((int)aiConfidence) + "%)") : "Sensor Heuristic Normal";
-  if (diagStr.length() > 24) diagStr = diagStr.substring(0, 24);
+  String diagStr = aiActive ? (aiDiagnosis + " (" + String((int)aiConfidence) + "%)") : tr("Sensor Heuristic Normal", "Датчики: Норма");
+  if (utf8_char_count(diagStr.c_str()) > 24) diagStr = diagStr.substring(0, 24);
   tft.print(diagStr);
 
   tft.setCursor(142, 90);
   tft.setTextColor(theme.txtDim);
-  tft.print("Sev: " + (aiActive ? aiSeverity : "None") + " | " + (aiSeverity == "None" ? "Clean Pathogen" : "Alert Active"));
+  tft.print(tr("Sev: ", "Уровень: ") + (aiActive ? aiSeverity : tr("None", "Нет")) + " | " + (aiSeverity == "None" ? tr("Clean Foliage", "Чистый лист") : tr("Alert Active", "Внимание")));
 
   // Ряд 2: Прогресс роста растения и биомасса (y: 112..160)
   drawGlowCard(8, 112, 304, 48, theme.primary, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.primary);
   tft.setCursor(16, 117);
-  tft.print("GROWTH: " + String((int)aiGrowthProgress) + "%");
+  tft.print(tr("GROWTH: ", "РОСТ: ") + String((int)aiGrowthProgress) + "%");
 
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(140, 117);
-  tft.print("STAGE " + String(aiGrowthStage) + "/4: " + aiStageName);
+  tft.setCursor(136, 117);
+  String stageStr = (aiGrowthStage == 1 ? tr("SPROUT", "ПРОРОСТОК") : (aiGrowthStage == 2 ? tr("VEG", "ВЕГЕТАЦИЯ") : (aiGrowthStage == 3 ? tr("BLOOM", "ЦВЕТЕНИЕ") : tr("MATURE", "УРОЖАЙ"))));
+  tft.print(tr("STAGE ", "СТАДИЯ ") + String(aiGrowthStage) + "/4: " + stageStr);
 
   // Многосегментный прогресс-бар развития растения
   int barW = 288;
@@ -1794,7 +2033,7 @@ void drawVisionScreen() {
 
   tft.setCursor(16, 143);
   tft.setTextColor(theme.txtDim);
-  tft.print("Biomass: " + String(aiBiomass, 1) + "% | Chl: " + String(aiChlorosis, 1) + "% | Nec: " + String(aiNecrosis, 1) + "%");
+  tft.print(tr("Biomass: ", "Биомасса: ") + String(aiBiomass, 1) + "% | " + tr("Chl: ", "Хлор: ") + String(aiChlorosis, 1) + "% | " + tr("Nec: ", "Некр: ") + String(aiNecrosis, 1) + "%");
 
   // Ряд 3: Агрономические рекомендации от Edge AI (y: 164..202)
   drawCard(8, 164, 304, 38, theme.surface, theme.border);
@@ -1802,7 +2041,7 @@ void drawVisionScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.accent);
   tft.setCursor(26, 169);
-  tft.print("AI RECOMMENDATION:");
+  tft.print(tr("AI RECOMMENDATION:", "AI РЕКОМЕНДАЦИЯ:"));
 
   drawWrappedText(aiAdvice.c_str(), 26, 180, 280, 9, 2, theme.txtMain);
 
@@ -1813,14 +2052,14 @@ void drawVisionScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(38, 215);
-  tft.print("BACK TO HOME");
+  tft.print(tr("BACK TO HOME", "НА ГЛАВНУЮ"));
 
   // Кнопка 2: [ 📷 СДЕЛАТЬ СНИМОК ] (x: 160..312)
   drawGlowCard(160, 206, 152, 28, theme.primary, theme.surfaceHi, theme.borderHi);
   iconDot(172, 220, 3, theme.primary);
   tft.setTextColor(theme.primary);
   tft.setCursor(182, 215);
-  tft.print("SNAP & DIAGNOSE");
+  tft.print(tr("SNAP & DIAGNOSE", "СДЕЛАТЬ СНИМОК"));
 }
 
 // ==========================================
@@ -1986,16 +2225,16 @@ void setupWebDashboard() {
                   ".btn.off{background:#28354a;color:var(--text)}"
                   ".btn.sec{background:#8c64ff;color:#fff}"
                   "</style></head><body><div class='box'>"
-                  "<div class='hdr'><h1>AGROBOX CYBER</h1><div class='badge' id='healthBadge'>--% PRIME</div></div>"
+                  "<div class='hdr'><h1>AGROBOX CYBER</h1><div style='display:flex;align-items:center;gap:6px;'><div class='badge' id='healthBadge'>--% PRIME</div><button class='btn sec' style='padding:4px 8px;font-size:11px' onclick='setLang(\"en\")'>EN</button><button class='btn sec' style='padding:4px 8px;font-size:11px' onclick='setLang(\"ru\")'>RU</button></div></div>"
                   "<div class='sub'>Automated Hydroponics & CyberSprout Hub</div>"
                   "<div class='sprout-box'><div class='sprout-avatar'>🌱</div><div><strong id='sproutMood'>CyberSprout</strong><div class='sprout-msg' id='wisdom'>\"Growing with high-tech ions!\"</div></div></div>"
                   "<div class='grid'>"
-                  "<div class='card'><h3>pH LEVEL</h3><div class='val' id='ph'>--</div></div>"
-                  "<div class='card'><h3>TDS NUTRIENTS</h3><div class='val' id='tds'>--<span class='unit'>ppm</span></div></div>"
-                  "<div class='card'><h3>WATER TEMP</h3><div class='val' id='wt'>--<span class='unit'>°C</span></div></div>"
-                  "<div class='card'><h3>AIR TEMP</h3><div class='val' id='at'>--<span class='unit'>°C</span></div></div>"
-                  "<div class='card'><h3>HUMIDITY</h3><div class='val' id='hum'>--<span class='unit'>%</span></div></div>"
-                  "<div class='card'><h3>VPD DEFICIT</h3><div class='val' id='vpd'>--<span class='unit'>kPa</span></div></div>"
+                  "<div class='card'><h3 id='phTitle'>pH LEVEL</h3><div class='val' id='ph'>--</div></div>"
+                  "<div class='card'><h3 id='tdsTitle'>TDS NUTRIENTS</h3><div class='val' id='tds'>--<span class='unit'>ppm</span></div></div>"
+                  "<div class='card'><h3 id='wtTitle'>WATER TEMP</h3><div class='val' id='wt'>--<span class='unit'>°C</span></div></div>"
+                  "<div class='card'><h3 id='atTitle'>AIR TEMP</h3><div class='val' id='at'>--<span class='unit'>°C</span></div></div>"
+                  "<div class='card'><h3 id='humTitle'>HUMIDITY</h3><div class='val' id='hum'>--<span class='unit'>%</span></div></div>"
+                  "<div class='card'><h3 id='vpdTitle'>VPD DEFICIT</h3><div class='val' id='vpd'>--<span class='unit'>kPa</span></div></div>"
                   "</div>"
                   "<div class='card' style='margin-bottom:18px;border:1px solid #00f5b9'>"
                   "<div style='display:flex;justify-content:space-between;align-items:center'>"
@@ -2023,7 +2262,25 @@ void setupWebDashboard() {
                   "document.getElementById('at').innerHTML=d.airTemp.toFixed(1)+'<span class=\"unit\">°C</span>';"
                   "document.getElementById('hum').innerHTML=Math.round(d.humidity)+'<span class=\"unit\">%</span>';"
                   "document.getElementById('vpd').innerHTML=d.vpd.toFixed(2)+'<span class=\"unit\">kPa</span>';"
+                  "if(d.lang=='ru'){"
+                  "document.getElementById('phTitle').innerText='УРОВЕНЬ pH';"
+                  "document.getElementById('tdsTitle').innerText='ПИТАНИЕ (TDS)';"
+                  "document.getElementById('wtTitle').innerText='ТЕМП. ВОДЫ';"
+                  "document.getElementById('atTitle').innerText='ТЕМП. ВОЗДУХА';"
+                  "document.getElementById('humTitle').innerText='ВЛАЖНОСТЬ';"
+                  "document.getElementById('vpdTitle').innerText='VPD (ДЕФИЦИТ)';"
+                  "document.getElementById('sproutMood').innerText='Кибер-Росток';"
+                  "document.getElementById('healthBadge').innerText=d.health+'% НОРМА';"
+                  "}else{"
+                  "document.getElementById('phTitle').innerText='pH LEVEL';"
+                  "document.getElementById('tdsTitle').innerText='TDS NUTRIENTS';"
+                  "document.getElementById('wtTitle').innerText='WATER TEMP';"
+                  "document.getElementById('atTitle').innerText='AIR TEMP';"
+                  "document.getElementById('humTitle').innerText='HUMIDITY';"
+                  "document.getElementById('vpdTitle').innerText='VPD DEFICIT';"
+                  "document.getElementById('sproutMood').innerText='CyberSprout';"
                   "document.getElementById('healthBadge').innerText=d.health+'% PRIME';"
+                  "}"
                   "document.getElementById('aiHealth').innerText=d.ai_health?d.ai_health.toFixed(1):d.health;"
                   "document.getElementById('aiGrowth').innerText=d.ai_growth?Math.round(d.ai_growth):'--';"
                   "document.getElementById('aiStage').innerText=d.ai_stage||'Veg';"
@@ -2035,6 +2292,7 @@ void setupWebDashboard() {
                   "if(d.pump){btn.innerText='Pump: ACTIVE';btn.className='btn'}"
                   "else{btn.innerText='Pump: STANDBY';btn.className='btn off'}"
                   "}catch(e){}}"
+                  "async function setLang(l){await fetch('/api/setLanguage?lang='+l);poll();}"
                   "async function togglePump(){await fetch('/api/togglePump');poll();}"
                   "async function petSprout(){await fetch('/api/pet');alert('You petted CyberSprout! ❤️');}"
                   "setInterval(poll,1500);poll();"
@@ -2062,9 +2320,33 @@ void setupWebDashboard() {
     json += "\"ai_diag\":\"" + aiDiagnosis + "\",";
     json += "\"ai_conf\":" + String(aiConfidence, 1) + ",";
     json += "\"ai_advice\":\"" + aiAdvice + "\",";
-    json += "\"ai_online\":" + String(aiActive ? "true" : "false");
+    json += "\"ai_online\":" + String(aiActive ? "true" : "false") + ",";
+    json += "\"lang\":\"" + String(currentLang == LANG_RU ? "ru" : "en") + "\"";
     json += "}";
     webServer.send(200, "application/json", json);
+  });
+
+  webServer.on("/api/setLanguage", HTTP_ANY, []() {
+    if (webServer.hasArg("lang")) {
+      String l = webServer.arg("lang");
+      if (l == "ru" || l == "RU") {
+        currentLang = LANG_RU;
+      } else {
+        currentLang = LANG_EN;
+      }
+      saveLanguagePreference();
+      if (!isSleeping) {
+        if (currentScreen == SCR_SETTINGS) drawSettingsScreen();
+        else if (currentScreen == SCR_HOME) drawHomeScreen();
+        else if (currentScreen == SCR_SPROUT) drawSproutScreen();
+        else if (currentScreen == SCR_VISION) drawVisionScreen();
+        else if (currentScreen == SCR_DETAIL) drawDetailScreen();
+        else if (currentScreen == SCR_ADVISOR) drawAdvisorScreen();
+      }
+      webServer.send(200, "application/json", "{\"status\":\"ok\",\"lang\":\"" + String(currentLang == LANG_RU ? "ru" : "en") + "\"}");
+    } else {
+      webServer.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"missing lang\"}");
+    }
   });
 
   // REST API: прием телеметрии Edge AI от Raspberry Pi по Wi-Fi
@@ -2245,7 +2527,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(26, 49);
-  tft.print("pH LEVEL");
+  tft.print(tr("pH LEVEL", "УРОВЕНЬ pH"));
 
   tft.setTextSize(2);
   tft.setTextColor(theme.txtMain);
@@ -2262,7 +2544,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(182, 49);
-  tft.print("NUTRIENTS (TDS)");
+  tft.print(tr("NUTRIENTS (TDS)", "ПИТАНИЕ (TDS)"));
 
   tft.setTextSize(2);
   tft.setTextColor(theme.txtMain);
@@ -2280,7 +2562,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(16, 107);
-  tft.print("WATER");
+  tft.print(tr("WATER", "ВОДА"));
   tft.setTextSize(2);
   tft.setTextColor(wtOk ? theme.txtMain : theme.warn);
   tft.setCursor(16, 122);
@@ -2293,7 +2575,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(92, 107);
-  tft.print("AIR");
+  tft.print(tr("AIR", "ВОЗДУХ"));
   tft.setTextSize(2);
   tft.setTextColor(atOk ? theme.txtMain : theme.warn);
   tft.setCursor(92, 122);
@@ -2306,7 +2588,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(168, 107);
-  tft.print("HUMID");
+  tft.print(tr("HUMID", "ВЛАЖН"));
   tft.setTextSize(2);
   tft.setTextColor(humOk ? theme.txtMain : theme.warn);
   tft.setCursor(168, 122);
@@ -2319,7 +2601,7 @@ void drawHomeScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(244, 107);
-  tft.print("VPD kPa");
+  tft.print(tr("VPD kPa", "VPD кПа"));
   tft.setTextSize(2);
   tft.setTextColor(vpdOk ? theme.primary : theme.warn);
   tft.setCursor(244, 122);
@@ -2331,15 +2613,15 @@ void drawHomeScreen() {
   tft.setTextSize(2);
   tft.setTextColor(theme.txtMain);
   tft.setCursor(44, 160);
-  tft.print("PUMP");
+  tft.print(tr("PUMP", "ПОМПА"));
 
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(44, 180);
   if (pumpAutoMode) {
-    tft.print(pumpState ? "Feed" : "Rest");
+    tft.print(pumpState ? tr("Feed", "Полив") : tr("Rest", "Пауза"));
   } else {
-    tft.print(pumpState ? "Run" : "Stop");
+    tft.print(pumpState ? tr("Run", "Работа") : tr("Stop", "Стоп"));
   }
 
   // Канал циркуляции жидкости
@@ -2446,14 +2728,14 @@ void refreshHomeValues() {
   if (pumpState != lastPumpState) {
     drawModernToggle(248, 161, 48, 26, pumpState);
     iconPower(26, 175, 7, pumpState ? theme.ok : theme.txtDim);
-    tft.fillRect(44, 180, 50, 12, theme.surface);
+    tft.fillRect(44, 180, 56, 12, theme.surface);
     tft.setTextSize(1);
     tft.setTextColor(theme.txtMuted);
     tft.setCursor(44, 180);
     if (pumpAutoMode) {
-      tft.print(pumpState ? "Feed" : "Rest");
+      tft.print(pumpState ? tr("Feed", "Полив") : tr("Rest", "Пауза"));
     } else {
-      tft.print(pumpState ? "Run" : "Stop");
+      tft.print(pumpState ? tr("Run", "Работа") : tr("Stop", "Стоп"));
     }
     if (!pumpState) {
       tft.fillRoundRect(104, 180, 132, 7, 3, theme.surfaceHi);
@@ -2467,96 +2749,110 @@ void refreshHomeValues() {
 // КАРТОЧКА РЕГУЛИРОВКИ ЯРКОСТИ (SETTINGS)
 // ==========================================
 void drawBrightnessControlCard(int y) {
-  drawCard(8, y, 304, 46, theme.surface, theme.border);
+  drawCard(8, y, 304, 32, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(18, y + 8);
-  tft.print("BRIGHTNESS");
+  tft.setCursor(16, y + 12);
+  tft.print(tr("BRIGHTNESS:", "ЯРКОСТЬ:"));
 
   // Кнопка [-]
-  drawCard(18, y + 20, 24, 20, theme.surfaceHi, theme.borderHi);
+  drawCard(94, y + 6, 22, 20, theme.surfaceHi, theme.borderHi);
   tft.setTextSize(2);
   tft.setTextColor(theme.txtMain);
-  tft.setCursor(25, y + 23);
+  tft.setCursor(101, y + 9);
   tft.print("-");
 
   // Прогресс-бар
-  int barX = 48, barY = y + 26, barW = 166, barH = 8;
+  int barX = 122, barY = y + 12, barW = 88, barH = 8;
   tft.fillRoundRect(barX, barY, barW, barH, 4, theme.surfaceHi);
   int fillW = (barW * brightnessLevel) / 100;
   tft.fillRoundRect(barX, barY, fillW, barH, 4, theme.primary);
 
   // Кнопка [+]
-  drawCard(220, y + 20, 24, 20, theme.surfaceHi, theme.borderHi);
-  tft.setCursor(226, y + 23);
+  drawCard(216, y + 6, 22, 20, theme.surfaceHi, theme.borderHi);
+  tft.setCursor(222, y + 9);
   tft.print("+");
 
   // Процент
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
-  tft.setCursor(256, y + 26);
-  tft.print(String(brightnessLevel) + "%  ");
+  tft.setCursor(246, y + 12);
+  tft.print(String(brightnessLevel) + "% ");
 }
 
 void drawSettingsScreen() {
   tft.fillScreen(theme.bg);
-  drawMinimalHeader("SETTINGS", false);
+  drawMinimalHeader(tr("SETTINGS", "НАСТРОЙКИ"), false);
 
-  // 1. Wi-Fi Card с IP
-  drawGlowCard(8, 42, 304, 40, theme.primary, theme.surface, theme.border);
-  iconSignal(18, 52, (WiFi.status() == WL_CONNECTED) ? 4 : 1, theme.ok, theme.borderHi);
+  // 1. Wi-Fi Card с IP (y = 40, h = 34)
+  drawGlowCard(8, 40, 304, 34, theme.primary, theme.surface, theme.border);
+  iconSignal(18, 49, (WiFi.status() == WL_CONNECTED) ? 4 : 1, theme.ok, theme.borderHi);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMain);
-  tft.setCursor(44, 48);
-  tft.print("Wi-Fi & Web Station");
+  tft.setCursor(44, 45);
+  tft.print(tr("Wi-Fi & Web Station", "Wi-Fi и Веб-станция"));
 
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(44, 62);
+  tft.setCursor(44, 58);
   if (WiFi.status() == WL_CONNECTED) {
     tft.print("http://" + WiFi.localIP().toString());
   } else if (savedSSID.length() > 0) {
     tft.print("Saved: " + savedSSID);
   } else {
-    tft.print("Tap to configure");
+    tft.print(tr("Tap to configure", "Нажмите для настройки"));
   }
-  iconChevronRight(288, 54, 12, theme.txtDim);
+  iconChevronRight(288, 50, 10, theme.txtDim);
 
-  // 2. Регулировка Яркости (y = 86, h = 46)
-  drawBrightnessControlCard(86);
+  // 2. Регулировка Яркости (y = 76, h = 32)
+  drawBrightnessControlCard(76);
 
-  // 3. Выбор темы оформления (Themes: Cyber / Nordic / Solar) (y = 136, h = 34)
-  drawCard(8, 136, 304, 34, theme.surface, theme.border);
+  // 3. Выбор языка (Language: EN / RU) (y = 110, h = 28)
+  drawCard(8, 110, 304, 28, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(16, 148);
-  tft.print("THEME:");
+  tft.setCursor(16, 120);
+  tft.print(tr("LANGUAGE:", "ЯЗЫК:"));
 
-  const char* themeNames[3] = { "CYBER", "NORDIC", "SOLAR" };
+  bool isEn = (currentLang == LANG_EN);
+  bool isRu = (currentLang == LANG_RU);
+  drawPill(108, 114, 90, 20, "ENGLISH", isEn ? theme.bg : theme.txtMuted, isEn ? theme.primary : theme.surfaceHi);
+  drawPill(206, 114, 98, 20, "РУССКИЙ", isRu ? theme.bg : theme.txtMuted, isRu ? theme.primary : theme.surfaceHi);
+
+  // 4. Выбор темы оформления (Themes: Cyber / Nordic / Solar) (y = 140, h = 28)
+  drawCard(8, 140, 304, 28, theme.surface, theme.border);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.txtMuted);
+  tft.setCursor(16, 150);
+  tft.print(tr("THEME:", "ТЕМА:"));
+
+  const char* themeNamesEN[3] = { "CYBER", "NORDIC", "SOLAR" };
+  const char* themeNamesRU[3] = { "КИБЕР", "НОРДИК", "СОЛАР" };
   for (int i = 0; i < 3; i++) {
-    int btnX = 64 + i * 82;
+    int btnX = 72 + i * 78;
     bool active = ((int)currentTheme == i);
-    drawPill(btnX, 142, 74, 22, themeNames[i], active ? theme.bg : theme.txtMuted, active ? theme.primary : theme.surfaceHi);
+    const char* tName = (currentLang == LANG_RU) ? themeNamesRU[i] : themeNamesEN[i];
+    drawPill(btnX, 144, 72, 20, tName, active ? theme.bg : theme.txtMuted, active ? theme.primary : theme.surfaceHi);
   }
 
-  // 4. Опции: Demo Waves, Grow Lamp & Calibrate (y = 172, h = 30)
-  drawCard(8, 172, 96, 28, theme.surface, theme.border);
+  // 5. Опции: Demo Waves, Grow Lamp & Calibrate (y = 170, h = 28)
+  drawCard(8, 170, 96, 28, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(14, 181);
-  tft.print("DEMO");
-  drawPill(50, 176, 50, 20, demoWavesEnabled ? "ON" : "OFF", demoWavesEnabled ? theme.ok : theme.txtDim, theme.surfaceHi);
+  tft.setCursor(14, 179);
+  tft.print(tr("DEMO", "ДЕМО"));
+  drawPill(50, 174, 50, 20, demoWavesEnabled ? tr("ON", "ВКЛ") : tr("OFF", "ВЫКЛ"), demoWavesEnabled ? theme.ok : theme.txtDim, theme.surfaceHi);
 
-  drawCard(112, 172, 96, 28, theme.surface, theme.border);
+  drawCard(112, 170, 96, 28, theme.surface, theme.border);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(118, 181);
-  tft.print("LAMP");
-  drawPill(152, 176, 52, 20, "LIGHT", theme.primary, theme.surfaceHi);
+  tft.setCursor(118, 179);
+  tft.print(tr("LAMP", "ЛАМПА"));
+  drawPill(152, 174, 52, 20, tr("LIGHT", "СВЕТ"), theme.primary, theme.surfaceHi);
 
-  drawCard(216, 172, 96, 28, theme.surface, theme.border);
+  drawCard(216, 170, 96, 28, theme.surface, theme.border);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(222, 181);
-  tft.print("TOUCH");
-  drawPill(258, 176, 50, 20, "ALIGN", theme.txtMain, theme.surfaceHi);
+  tft.setCursor(222, 179);
+  tft.print(tr("TOUCH", "ТАЧ"));
+  drawPill(258, 174, 50, 20, tr("ALIGN", "ТЕСТ"), theme.txtMain, theme.surfaceHi);
 
   drawBottomTabs(2);
 }
@@ -2997,31 +3293,43 @@ void handleTouches() {
           drawSproutScreen();
         }
       }
-      // Wi-Fi Setup Card
-      else if (x >= 8 && x <= 312 && y >= 42 && y <= 82) {
+      // Wi-Fi Setup Card (y: 40..74)
+      else if (x >= 8 && x <= 312 && y >= 40 && y < 76) {
         currentScreen = SCR_WIFI_SCAN;
         drawWifiScanScreen();
       }
-      // Регулировка яркости
-      else if (y >= 86 && y <= 132) {
-        if (x >= 14 && x <= 44) {
+      // Регулировка яркости (y: 76..108)
+      else if (y >= 76 && y < 108) {
+        if (x >= 14 && x <= 118) {
           if (brightnessLevel > 10) {
             setDisplayBrightness(brightnessLevel - 10);
-            drawBrightnessControlCard(86);
+            drawBrightnessControlCard(76);
           }
-        } else if (x >= 216 && x <= 246) {
+        } else if (x >= 214 && x <= 248) {
           if (brightnessLevel < 100) {
             setDisplayBrightness(brightnessLevel + 10);
-            drawBrightnessControlCard(86);
+            drawBrightnessControlCard(76);
           }
-        } else if (x >= 48 && x <= 214) {
-          int mapped = map(x, 48, 214, 10, 100);
+        } else if (x >= 118 && x <= 214) {
+          int mapped = map(x, 118, 214, 10, 100);
           setDisplayBrightness(constrain(mapped, 10, 100));
-          drawBrightnessControlCard(86);
+          drawBrightnessControlCard(76);
         }
       }
-      // Выбор темы оформления (CYBER, NORDIC, SOLAR)
-      else if (y >= 136 && y <= 170) {
+      // Выбор языка (EN / RU) (y: 108..138)
+      else if (y >= 108 && y < 138) {
+        if (x >= 100 && x < 204) {
+          currentLang = LANG_EN;
+          saveLanguagePreference();
+          drawSettingsScreen();
+        } else if (x >= 204 && x <= 312) {
+          currentLang = LANG_RU;
+          saveLanguagePreference();
+          drawSettingsScreen();
+        }
+      }
+      // Выбор темы оформления (CYBER, NORDIC, SOLAR) (y: 138..168)
+      else if (y >= 138 && y < 168) {
         if (x >= 64 && x < 146) {
           applyTheme(THEME_CYBER_EMERALD);
           saveThemePreference();
@@ -3036,16 +3344,16 @@ void handleTouches() {
           drawSettingsScreen();
         }
       }
-      // Опции внизу настроек: Demo Waves, Grow Lamp, Touch Calibrate
-      else if (y >= 170 && y <= 204) {
+      // Опции внизу настроек: Demo Waves, Grow Lamp, Touch Calibrate (y: 168..202)
+      else if (y >= 168 && y <= 202) {
         if (x >= 8 && x < 108) {
           demoWavesEnabled = !demoWavesEnabled;
-          drawCard(8, 172, 96, 28, theme.surface, theme.border);
+          drawCard(8, 170, 96, 28, theme.surface, theme.border);
           tft.setTextSize(1);
           tft.setTextColor(theme.txtMuted);
-          tft.setCursor(14, 181);
-          tft.print("DEMO");
-          drawPill(50, 176, 50, 20, demoWavesEnabled ? "ON" : "OFF", demoWavesEnabled ? theme.ok : theme.txtDim, theme.surfaceHi);
+          tft.setCursor(14, 179);
+          tft.print(tr("DEMO", "ДЕМО"));
+          drawPill(50, 174, 50, 20, demoWavesEnabled ? tr("ON", "ВКЛ") : tr("OFF", "ВЫКЛ"), demoWavesEnabled ? theme.ok : theme.txtDim, theme.surfaceHi);
         } else if (x >= 108 && x < 214) {
           currentScreen = SCR_LAMP;
           drawLampScreen();
@@ -3138,6 +3446,7 @@ void setup() {
   initBacklight();
   loadThemePreference();
   loadDisplaySettings();
+  loadLanguagePreference();
 
   // Инициализация SPI и ILI9341
   tftSPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, TFT_CS);
