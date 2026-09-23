@@ -29,11 +29,13 @@ apt-get install -y --no-install-recommends \
 
 # 3. CPU Governor Configuration (Switch from ondemand to performance)
 echo -e "\n[2/5] Настройка регулятора частоты CPU (Performance Governor)..."
+for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    if [ -f "$gov" ]; then
+        echo "performance" > "$gov" 2>/dev/null || true
+    fi
+done
 if command -v cpufreq-set &> /dev/null; then
-    cpufreq-set -g performance || true
-else
-    apt-get install -y cpufrequtils
-    cpufreq-set -g performance || true
+    cpufreq-set -g performance 2>/dev/null || true
 fi
 
 # Set OpenMP and Threading environment variables for Quad-core Cortex-A72
