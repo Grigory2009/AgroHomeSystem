@@ -12,6 +12,7 @@ psutil>=5.9.0
 streamlit>=1.25.0
 pandas>=2.0.0
 requests>=2.28.0
+pyserial>=3.5.0
 
 # Optional PyTorch/TorchScript/Transformers backends (for training/legacy models)
 torch>=2.0.0

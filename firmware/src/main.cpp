@@ -229,9 +229,35 @@ enum ScreenState {
   SCR_WIFI_SCAN, 
   SCR_KBD, 
   SCR_DETAIL, 
-  SCR_ADVISOR 
+  SCR_ADVISOR,
+  SCR_VISION
 };
 ScreenState currentScreen = SCR_HOME;
+
+// ==========================================
+// EDGE AI & RASPBERRY PI 4 СИНХРОНИЗАЦИЯ
+// ==========================================
+float  aiPlantHealth   = 96.0f; // Комплексный индекс здоровья (0..100%)
+float  aiGrowthProgress = 35.0f; // Прогресс роста растения (0..100%)
+int    aiGrowthStage   = 2;     // 1: Проросток, 2: Вегетация, 3: Цветение, 4: Зрелость
+String aiStageName     = "VEGETATIVE";
+float  aiBiomass       = 32.5f; // Площадь листвы ExG (%)
+float  aiChlorosis     = 1.5f;  // Хлороз (%)
+float  aiNecrosis      = 0.2f;  // Некроз (%)
+String aiCropName      = "Tomato";
+String aiDiagnosis     = "Healthy";
+float  aiConfidence    = 98.5f; // Уверенность классификатора (%)
+String aiSeverity      = "None";
+String aiAdvice        = "Optimal foliage and biomass. Maintain current VPD.";
+float  aiRpiTemp       = 45.0f; // Температура CPU Raspberry Pi
+float  aiInferenceMs   = 18.2f; // Время инференса модели (мс)
+unsigned long aiLastSyncMillis = 0;
+bool   aiConnected     = false;
+bool   aiHasEverSynced = false;
+
+bool isAiConnected() {
+  return (aiHasEverSynced && (millis() - aiLastSyncMillis < 15000UL));
+}
 
 // Локальный веб-сервер на порту 80
 WebServer webServer(80);
@@ -363,6 +389,10 @@ void endMiniGame();
 void exitMiniGame();
 void drawLampScreen();
 void exitLampMode();
+void drawVisionScreen();
+void processSerialCommunication();
+void sendSerialTelemetry(const char* type);
+void applyAiSyncData(const String& jsonStr);
 void addSproutXP(int amount);
 void saveSproutProgress();
 void loadSproutProgress();
@@ -840,11 +870,12 @@ void drawMinimalHeader(const char* title, bool showBack = false) {
     tft.setCursor(24, 10);
     tft.print(title);
 
-    // Индикатор Plant Health Score (тап открывает Тамагочи / Советник)
-    int health = calculatePlantHealthScore();
+    // Индикатор Plant Health Score (тап открывает Edge AI Vision / Советник)
+    bool aiActive = isAiConnected();
+    int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
     uint16_t badgeColor = (health >= 85) ? theme.ok : (health >= 65 ? theme.warn : theme.alert);
-    String healthStr = String(health) + "% " + (health >= 85 ? "PRIME" : (health >= 65 ? "FAIR" : "ATTN"));
-    drawPill(118, 8, 92, 20, healthStr.c_str(), badgeColor, theme.surfaceHi, theme.border);
+    String healthStr = (aiActive ? "AI " : "") + String(health) + "% " + (health >= 85 ? "PRIME" : (health >= 65 ? "FAIR" : "ATTN"));
+    drawPill(118, 8, 92, 20, healthStr.c_str(), badgeColor, theme.surfaceHi, aiActive ? theme.primary : theme.border);
 
     // Uptime & CPU Temp HUD
     int cpuTemp = (int)temperatureRead();
@@ -1275,7 +1306,14 @@ void drawSproutScreen() {
   tft.fillScreen(theme.bg);
   drawMinimalHeader("CYBER SPROUT", false);
 
-  int health = calculatePlantHealthScore();
+  bool aiActive = isAiConnected();
+  int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
+  if (aiActive) {
+    sproutLevel = constrain(aiGrowthStage, 1, 4);
+    int xpMax = sproutLevel * 100;
+    sproutXP = constrain((int)((aiGrowthProgress * (float)xpMax) / 100.0f), 0, xpMax);
+  }
+
   if (millis() < sproutLoveUntil) {
     currentSproutMood = MOOD_LOVE;
   } else if (health >= 85) {
@@ -1318,7 +1356,12 @@ void drawSproutScreen() {
   tft.fillTriangle(152, 86, 152, 96, 146, 91, theme.border);
   tft.fillTriangle(153, 87, 153, 95, 147, 91, theme.surface);
 
-  drawWrappedText(agroWisdomQuotes[currentWisdomIndex], 158, 78, 148, 10, 3, theme.txtMain);
+  if (aiActive && aiDiagnosis.length() > 0) {
+    String bubbleMsg = aiCropName + ": " + aiDiagnosis + " (" + String((int)aiConfidence) + "%). Growth: " + String((int)aiGrowthProgress) + "%";
+    drawWrappedText(bubbleMsg.c_str(), 158, 78, 148, 10, 3, theme.txtMain);
+  } else {
+    drawWrappedText(agroWisdomQuotes[currentWisdomIndex], 158, 78, 148, 10, 3, theme.txtMain);
+  }
 
   // 4. Интерактивные кнопки действий питомца (Справа, y: 126..202)
   // Кнопка 1: [ ❤️ ПОГЛАДИТЬ / PET SPROUT ]
@@ -1336,12 +1379,12 @@ void drawSproutScreen() {
   tft.setCursor(174, 159);
   tft.print("WATER & FEED (+10XP)");
 
-  // Кнопка 3: [ 🎮 МИНИ-ИГРА / PLAY GAME ]
+  // Кнопка 3: [ 👁️ AI PLANT VISION > ]
   drawGlowCard(152, 178, 160, 24, theme.primary, theme.surfaceHi, theme.borderHi);
   iconDot(164, 190, 3, theme.primary);
   tft.setTextColor(theme.primary);
   tft.setCursor(174, 186);
-  tft.print("PLAY MINI-GAME >");
+  tft.print("AI PLANT VISION >");
 
   drawBottomTabs(1);
 }
@@ -1577,7 +1620,8 @@ void drawAdvisorScreen() {
   tft.fillScreen(theme.bg);
   drawMinimalHeader("AGRO ADVISOR", true);
 
-  int health = calculatePlantHealthScore();
+  bool aiActive = isAiConnected();
+  int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
   uint16_t hColor = (health >= 85) ? theme.ok : (health >= 65 ? theme.warn : theme.alert);
 
   drawGlowCard(8, 42, 304, 46, hColor, theme.surface, theme.border);
@@ -1589,13 +1633,21 @@ void drawAdvisorScreen() {
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
   tft.setCursor(100, 50);
-  tft.print("STATUS: ");
+  tft.print(aiActive ? "AI DIAG: " : "STATUS: ");
   tft.setTextColor(hColor);
-  tft.print(health >= 85 ? "OPTIMAL ECOSYSTEM" : (health >= 65 ? "SLIGHT IMBALANCE" : "ATTENTION REQUIRED"));
+  if (aiActive) {
+    tft.print(aiDiagnosis + " [" + aiStageName + "]");
+  } else {
+    tft.print(health >= 85 ? "OPTIMAL ECOSYSTEM" : (health >= 65 ? "SLIGHT IMBALANCE" : "ATTENTION REQUIRED"));
+  }
 
   tft.setTextColor(theme.txtDim);
   tft.setCursor(100, 68);
-  tft.print("VPD " + String(current_VPD, 2) + " kPa | Transpiration in zone");
+  if (aiActive) {
+    tft.print("Growth: " + String((int)aiGrowthProgress) + "% | Biomass: " + String(aiBiomass, 1) + "%");
+  } else {
+    tft.print("VPD " + String(current_VPD, 2) + " kPa | Transpiration in zone");
+  }
 
   int cardY = 94;
 
@@ -1654,6 +1706,258 @@ void drawAdvisorScreen() {
 }
 
 // ==========================================
+// ЭКРАН EDGE AI & ДИАГНОСТИКИ РАСТЕНИЯ (SCR_VISION)
+// ==========================================
+void drawVisionScreen() {
+  tft.fillScreen(theme.bg);
+  drawMinimalHeader("AI PLANT VISION", true);
+
+  bool aiActive = isAiConnected();
+  int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
+  uint16_t hColor = (health >= 85) ? theme.ok : (health >= 65 ? theme.warn : theme.alert);
+
+  // Статусная полоса источника данных (y: 40..48)
+  tft.setTextSize(1);
+  if (aiActive) {
+    iconDot(14, 45, 3, theme.ok);
+    tft.setTextColor(theme.ok);
+    tft.setCursor(24, 42);
+    tft.print("RPi 4B EDGE AI ONLINE");
+
+    tft.setTextColor(theme.txtDim);
+    tft.setCursor(174, 42);
+    tft.print("CPU " + String((int)aiRpiTemp) + "C | " + String((int)aiInferenceMs) + "ms");
+  } else {
+    iconDot(14, 45, 3, theme.warn);
+    tft.setTextColor(theme.warn);
+    tft.setCursor(24, 42);
+    tft.print("STANDBY: AUTONOMOUS SENSORS");
+
+    tft.setTextColor(theme.txtDim);
+    tft.setCursor(200, 42);
+    tft.print("USB/WiFi IDLE");
+  }
+
+  // Ряд 1: Здоровье AI (слева) и Культура / Диагноз (справа) (y: 54..108)
+  drawGlowCard(8, 54, 120, 54, hColor, theme.surface, theme.border);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.txtMuted);
+  tft.setCursor(16, 60);
+  tft.print("AI HEALTH");
+
+  tft.setTextSize(3);
+  tft.setTextColor(hColor);
+  tft.setCursor(16, 73);
+  tft.print(String(health) + "%");
+
+  drawGlowCard(134, 54, 178, 54, theme.secondary, theme.surface, theme.border);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.txtMuted);
+  tft.setCursor(142, 60);
+  tft.print("CROP: ");
+  tft.setTextColor(theme.txtMain);
+  tft.print(aiActive ? aiCropName : "Agro Culture");
+
+  tft.setCursor(142, 73);
+  tft.setTextColor(hColor);
+  String diagStr = aiActive ? (aiDiagnosis + " (" + String((int)aiConfidence) + "%)") : "Sensor Heuristic Normal";
+  if (diagStr.length() > 24) diagStr = diagStr.substring(0, 24);
+  tft.print(diagStr);
+
+  tft.setCursor(142, 90);
+  tft.setTextColor(theme.txtDim);
+  tft.print("Sev: " + (aiActive ? aiSeverity : "None") + " | " + (aiSeverity == "None" ? "Clean Pathogen" : "Alert Active"));
+
+  // Ряд 2: Прогресс роста растения и биомасса (y: 112..160)
+  drawGlowCard(8, 112, 304, 48, theme.primary, theme.surface, theme.border);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.primary);
+  tft.setCursor(16, 117);
+  tft.print("GROWTH: " + String((int)aiGrowthProgress) + "%");
+
+  tft.setTextColor(theme.txtMuted);
+  tft.setCursor(140, 117);
+  tft.print("STAGE " + String(aiGrowthStage) + "/4: " + aiStageName);
+
+  // Многосегментный прогресс-бар развития растения
+  int barW = 288;
+  int barH = 8;
+  tft.fillRoundRect(16, 129, barW, barH, 3, theme.surfaceHi);
+  int fillW = constrain((int)((aiGrowthProgress * (float)barW) / 100.0f), 4, barW);
+  tft.fillRoundRect(16, 129, fillW, barH, 3, theme.primary);
+
+  // Разделители стадий (Проросток / Вегетация / Цветение / Урожай)
+  for (int st = 1; st <= 3; st++) {
+    int dx = 16 + (st * barW) / 4;
+    tft.drawFastVLine(dx, 129, barH, theme.borderHi);
+  }
+
+  tft.setCursor(16, 143);
+  tft.setTextColor(theme.txtDim);
+  tft.print("Biomass: " + String(aiBiomass, 1) + "% | Chl: " + String(aiChlorosis, 1) + "% | Nec: " + String(aiNecrosis, 1) + "%");
+
+  // Ряд 3: Агрономические рекомендации от Edge AI (y: 164..202)
+  drawCard(8, 164, 304, 38, theme.surface, theme.border);
+  iconDot(18, 174, 3, theme.accent);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.accent);
+  tft.setCursor(26, 169);
+  tft.print("AI RECOMMENDATION:");
+
+  drawWrappedText(aiAdvice.c_str(), 26, 180, 280, 9, 2, theme.txtMain);
+
+  // Ряд 4: Кнопки навигации и управления (y: 206..234)
+  // Кнопка 1: [ < НАЗАД ] (x: 8..152)
+  drawCard(8, 206, 144, 28, theme.surfaceHi, theme.borderHi);
+  iconBackArrow(20, 214, 12, theme.primary);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.txtMain);
+  tft.setCursor(38, 215);
+  tft.print("BACK TO HOME");
+
+  // Кнопка 2: [ 📷 СДЕЛАТЬ СНИМОК ] (x: 160..312)
+  drawGlowCard(160, 206, 152, 28, theme.primary, theme.surfaceHi, theme.borderHi);
+  iconDot(172, 220, 3, theme.primary);
+  tft.setTextColor(theme.primary);
+  tft.setCursor(182, 215);
+  tft.print("SNAP & DIAGNOSE");
+}
+
+// ==========================================
+// ПАРСИНГ JSON И ДВУСТОРОННЯЯ СВЯЗЬ С RASPBERRY PI
+// ==========================================
+String getJsonString(const String& json, const String& key) {
+  String pattern = "\"" + key + "\":\"";
+  int idx = json.indexOf(pattern);
+  if (idx == -1) return "";
+  idx += pattern.length();
+  int endIdx = json.indexOf("\"", idx);
+  if (endIdx == -1) return "";
+  return json.substring(idx, endIdx);
+}
+
+float getJsonFloat(const String& json, const String& key, float defaultVal) {
+  String pattern = "\"" + key + "\":";
+  int idx = json.indexOf(pattern);
+  if (idx == -1) return defaultVal;
+  idx += pattern.length();
+  while (idx < (int)json.length() && (json[idx] == ' ' || json[idx] == '\"')) idx++;
+  int endIdx = idx;
+  while (endIdx < (int)json.length() && (isDigit(json[endIdx]) || json[endIdx] == '.' || json[endIdx] == '-')) endIdx++;
+  if (endIdx > idx) {
+    return json.substring(idx, endIdx).toFloat();
+  }
+  return defaultVal;
+}
+
+int getJsonInt(const String& json, const String& key, int defaultVal) {
+  return (int)getJsonFloat(json, key, (float)defaultVal);
+}
+
+void applyAiSyncData(const String& jsonStr) {
+  aiPlantHealth   = constrain(getJsonFloat(jsonStr, "ai_health", aiPlantHealth), 0.0f, 100.0f);
+  aiGrowthProgress = constrain(getJsonFloat(jsonStr, "growth", aiGrowthProgress), 0.0f, 100.0f);
+  aiGrowthStage   = constrain(getJsonInt(jsonStr, "stage", aiGrowthStage), 1, 4);
+
+  String sName = getJsonString(jsonStr, "stage_name");
+  if (sName.length() > 0) aiStageName = sName;
+
+  aiBiomass       = getJsonFloat(jsonStr, "biomass", aiBiomass);
+  aiChlorosis     = getJsonFloat(jsonStr, "chl", aiChlorosis);
+  aiNecrosis      = getJsonFloat(jsonStr, "nec", aiNecrosis);
+
+  String crop = getJsonString(jsonStr, "crop");
+  if (crop.length() > 0) aiCropName = crop;
+
+  String diag = getJsonString(jsonStr, "diag");
+  if (diag.length() > 0) aiDiagnosis = diag;
+
+  aiConfidence    = getJsonFloat(jsonStr, "conf", aiConfidence);
+
+  String sev = getJsonString(jsonStr, "sev");
+  if (sev.length() > 0) aiSeverity = sev;
+
+  String adv = getJsonString(jsonStr, "advice");
+  if (adv.length() > 0) aiAdvice = adv;
+
+  aiRpiTemp       = getJsonFloat(jsonStr, "rpi_temp", aiRpiTemp);
+  aiInferenceMs   = getJsonFloat(jsonStr, "infer_ms", aiInferenceMs);
+
+  aiLastSyncMillis = millis();
+  aiConnected     = true;
+  aiHasEverSynced = true;
+
+  // Автоматическая синхронизация тамагочи с реальным развитием растения
+  sproutLevel = constrain(aiGrowthStage, 1, 4);
+  int xpMax = sproutLevel * 100;
+  sproutXP = constrain((int)((aiGrowthProgress * (float)xpMax) / 100.0f), 0, xpMax);
+
+  if (currentScreen == SCR_VISION && !isSleeping) {
+    drawVisionScreen();
+  } else if (currentScreen == SCR_HOME && !isSleeping) {
+    refreshHomeValues();
+  } else if (currentScreen == SCR_SPROUT && !isSleeping) {
+    drawSproutScreen();
+  }
+}
+
+String serialRxBuffer = "";
+unsigned long lastSerialTelemetry = 0;
+
+void sendSerialTelemetry(const char* type) {
+  String msg = "{\"type\":\"" + String(type) + "\",";
+  msg += "\"ph\":" + String(current_pH, 2) + ",";
+  msg += "\"tds\":" + String(current_TDS) + ",";
+  msg += "\"water_temp\":" + String(current_waterTemp, 2) + ",";
+  msg += "\"air_temp\":" + String(current_airTemp, 2) + ",";
+  msg += "\"humidity\":" + String(current_humidity, 2) + ",";
+  msg += "\"vpd\":" + String(current_VPD, 2) + ",";
+  msg += "\"pump\":" + String(pumpState ? "true" : "false") + ",";
+  msg += "\"health_calc\":" + String(calculatePlantHealthScore()) + ",";
+  msg += "\"uptime\":" + String(millis() / 1000) + "}\n";
+  Serial.print(msg);
+}
+
+void processSerialCommunication() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      serialRxBuffer.trim();
+      if (serialRxBuffer.length() > 0) {
+        if (serialRxBuffer.startsWith("{") && serialRxBuffer.endsWith("}")) {
+          String type = getJsonString(serialRxBuffer, "type");
+          if (type == "ai_sync") {
+            applyAiSyncData(serialRxBuffer);
+            sendSerialTelemetry("ack");
+          } else if (type == "cmd") {
+            String action = getJsonString(serialRxBuffer, "action");
+            if (action == "pump_on") { pumpState = true; lastPumpState = true; }
+            else if (action == "pump_off") { pumpState = false; lastPumpState = false; }
+            else if (action == "toggle_pump") { pumpState = !pumpState; lastPumpState = pumpState; }
+            if (currentScreen == SCR_HOME && !isSleeping) refreshHomeValues();
+            sendSerialTelemetry("ack");
+          }
+        }
+        serialRxBuffer = "";
+      }
+    } else {
+      if (serialRxBuffer.length() < 1024) {
+        serialRxBuffer += c;
+      } else {
+        serialRxBuffer = "";
+      }
+    }
+  }
+
+  // Периодическая трансляция телеметрии в Serial (каждые 2 секунды)
+  unsigned long now = millis();
+  if (now - lastSerialTelemetry >= 2000UL) {
+    lastSerialTelemetry = now;
+    sendSerialTelemetry("telemetry");
+  }
+}
+
+// ==========================================
 // ЛОКАЛЬНЫЙ WEB DASHBOARD (MOBILE & PC)
 // ==========================================
 void setupWebDashboard() {
@@ -1693,6 +1997,19 @@ void setupWebDashboard() {
                   "<div class='card'><h3>HUMIDITY</h3><div class='val' id='hum'>--<span class='unit'>%</span></div></div>"
                   "<div class='card'><h3>VPD DEFICIT</h3><div class='val' id='vpd'>--<span class='unit'>kPa</span></div></div>"
                   "</div>"
+                  "<div class='card' style='margin-bottom:18px;border:1px solid #00f5b9'>"
+                  "<div style='display:flex;justify-content:space-between;align-items:center'>"
+                  "<h3 style='color:#00f5b9;margin:0;font-size:12px;letter-spacing:0.05em'>EDGE AI PLANT VISION (RPI 4B)</h3>"
+                  "<span class='badge' id='aiBadge'>STANDBY</span>"
+                  "</div>"
+                  "<div style='margin-top:10px;font-size:15px;font-weight:700'>"
+                  "AI Health: <span id='aiHealth' style='color:#00f5b9'>--</span>% | Growth: <span id='aiGrowth'>--</span>% (<span id='aiStage'>--</span>)"
+                  "</div>"
+                  "<div style='margin-top:6px;font-size:13px;color:#f8fafc'>"
+                  "Diagnosis: <span id='aiDiag' style='color:#82e0ff'>--</span>"
+                  "</div>"
+                  "<div style='margin-top:4px;font-size:12px;color:#c0d0e4;font-style:italic' id='aiAdvice'>--</div>"
+                  "</div>"
                   "<div class='actions'>"
                   "<button class='btn' id='pumpBtn' onclick='togglePump()'>Pump</button>"
                   "<button class='btn sec' onclick='petSprout()'>❤️ Pet Sprout</button>"
@@ -1707,6 +2024,13 @@ void setupWebDashboard() {
                   "document.getElementById('hum').innerHTML=Math.round(d.humidity)+'<span class=\"unit\">%</span>';"
                   "document.getElementById('vpd').innerHTML=d.vpd.toFixed(2)+'<span class=\"unit\">kPa</span>';"
                   "document.getElementById('healthBadge').innerText=d.health+'% PRIME';"
+                  "document.getElementById('aiHealth').innerText=d.ai_health?d.ai_health.toFixed(1):d.health;"
+                  "document.getElementById('aiGrowth').innerText=d.ai_growth?Math.round(d.ai_growth):'--';"
+                  "document.getElementById('aiStage').innerText=d.ai_stage||'Veg';"
+                  "document.getElementById('aiDiag').innerText=d.ai_diag?(d.ai_crop+': '+d.ai_diag+' ('+Math.round(d.ai_conf)+'%)'):'Healthy';"
+                  "document.getElementById('aiAdvice').innerText=d.ai_advice||'Optimal conditions.';"
+                  "const b=document.getElementById('aiBadge');b.innerText=d.ai_online?'ONLINE':'STANDBY';"
+                  "b.style.borderColor=d.ai_online?'#00f5b9':'#ffb142';b.style.color=d.ai_online?'#00f5b9':'#ffb142';"
                   "const btn=document.getElementById('pumpBtn');"
                   "if(d.pump){btn.innerText='Pump: ACTIVE';btn.className='btn'}"
                   "else{btn.innerText='Pump: STANDBY';btn.className='btn off'}"
@@ -1719,6 +2043,9 @@ void setupWebDashboard() {
   });
 
   webServer.on("/api/data", HTTP_GET, []() {
+    bool aiActive = isAiConnected();
+    int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
+
     String json = "{";
     json += "\"ph\":" + String(current_pH, 2) + ",";
     json += "\"tds\":" + String(current_TDS) + ",";
@@ -1726,10 +2053,62 @@ void setupWebDashboard() {
     json += "\"airTemp\":" + String(current_airTemp, 2) + ",";
     json += "\"humidity\":" + String(current_humidity, 2) + ",";
     json += "\"vpd\":" + String(current_VPD, 2) + ",";
-    json += "\"health\":" + String(calculatePlantHealthScore()) + ",";
-    json += "\"pump\":" + String(pumpState ? "true" : "false");
+    json += "\"health\":" + String(health) + ",";
+    json += "\"pump\":" + String(pumpState ? "true" : "false") + ",";
+    json += "\"ai_health\":" + String(aiPlantHealth, 1) + ",";
+    json += "\"ai_growth\":" + String(aiGrowthProgress, 1) + ",";
+    json += "\"ai_stage\":\"" + aiStageName + "\",";
+    json += "\"ai_crop\":\"" + aiCropName + "\",";
+    json += "\"ai_diag\":\"" + aiDiagnosis + "\",";
+    json += "\"ai_conf\":" + String(aiConfidence, 1) + ",";
+    json += "\"ai_advice\":\"" + aiAdvice + "\",";
+    json += "\"ai_online\":" + String(aiActive ? "true" : "false");
     json += "}";
     webServer.send(200, "application/json", json);
+  });
+
+  // REST API: прием телеметрии Edge AI от Raspberry Pi по Wi-Fi
+  webServer.on("/api/ai/update", HTTP_POST, []() {
+    if (webServer.hasArg("plain")) {
+      String body = webServer.arg("plain");
+      applyAiSyncData(body);
+      webServer.send(200, "application/json", "{\"status\":\"ok\"}");
+    } else {
+      webServer.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"missing body\"}");
+    }
+  });
+
+  // REST API: передача данных сенсоров инкубатора для RPi
+  webServer.on("/api/rpi/telemetry", HTTP_GET, []() {
+    String json = "{";
+    json += "\"ph\":" + String(current_pH, 2) + ",";
+    json += "\"tds\":" + String(current_TDS) + ",";
+    json += "\"water_temp\":" + String(current_waterTemp, 2) + ",";
+    json += "\"air_temp\":" + String(current_airTemp, 2) + ",";
+    json += "\"humidity\":" + String(current_humidity, 2) + ",";
+    json += "\"vpd\":" + String(current_VPD, 2) + ",";
+    json += "\"pump\":" + String(pumpState ? "true" : "false") + ",";
+    json += "\"health_calc\":" + String(calculatePlantHealthScore()) + ",";
+    json += "\"ai_health\":" + String(aiPlantHealth, 1) + ",";
+    json += "\"growth\":" + String(aiGrowthProgress, 1) + ",";
+    json += "\"uptime\":" + String(millis() / 1000);
+    json += "}";
+    webServer.send(200, "application/json", json);
+  });
+
+  // REST API: удаленное управление (помпа, свет) от Raspberry Pi
+  webServer.on("/api/cmd", HTTP_POST, []() {
+    if (webServer.hasArg("plain")) {
+      String body = webServer.arg("plain");
+      String action = getJsonString(body, "action");
+      if (action == "pump_on") { pumpState = true; lastPumpState = true; }
+      else if (action == "pump_off") { pumpState = false; lastPumpState = false; }
+      else if (action == "toggle_pump") { pumpState = !pumpState; lastPumpState = pumpState; }
+      if (currentScreen == SCR_HOME) refreshHomeValues();
+      webServer.send(200, "application/json", "{\"status\":\"ok\",\"pump\":" + String(pumpState ? "true" : "false") + "}");
+    } else {
+      webServer.send(400, "application/json", "{\"status\":\"error\"}");
+    }
   });
 
   webServer.on("/api/togglePump", HTTP_GET, []() {
@@ -1847,6 +2226,7 @@ void wakeFromSleepMode() {
   else if (currentScreen == SCR_DETAIL) drawDetailScreen();
   else if (currentScreen == SCR_SETTINGS) drawSettingsScreen();
   else if (currentScreen == SCR_ADVISOR) drawAdvisorScreen();
+  else if (currentScreen == SCR_VISION) drawVisionScreen();
 }
 
 // ==========================================
@@ -1979,7 +2359,7 @@ void drawHomeScreen() {
   lastDrawn_airTemp = current_airTemp;
   lastDrawn_humidity = current_humidity;
   lastDrawn_VPD = current_VPD;
-  lastDrawn_Health = calculatePlantHealthScore();
+  lastDrawn_Health = isAiConnected() ? (int)aiPlantHealth : calculatePlantHealthScore();
   lastPumpState = pumpState;
   lastWifiConnected = (WiFi.status() == WL_CONNECTED);
 }
@@ -1988,7 +2368,8 @@ void refreshHomeValues() {
   if (currentScreen != SCR_HOME) return;
 
   bool connected = (WiFi.status() == WL_CONNECTED);
-  int health = calculatePlantHealthScore();
+  bool aiActive = isAiConnected();
+  int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
   if (connected != lastWifiConnected || health != lastDrawn_Health) {
     drawMinimalHeader("AGROBOX", false);
     lastWifiConnected = connected;
@@ -2374,7 +2755,7 @@ void handleTouches() {
       currentScreen = SCR_SPROUT;
       drawSproutScreen();
       return;
-    } else if (currentScreen == SCR_SPROUT || currentScreen == SCR_DETAIL || currentScreen == SCR_ADVISOR) {
+    } else if (currentScreen == SCR_SPROUT || currentScreen == SCR_DETAIL || currentScreen == SCR_ADVISOR || currentScreen == SCR_VISION) {
       currentScreen = SCR_HOME;
       drawHomeScreen();
       return;
@@ -2392,10 +2773,10 @@ void handleTouches() {
   // Обработка тапов по экранам
   if (currentScreen == SCR_HOME) {
     if (gesture == GESTURE_TAP) {
-      // Клик по бейджу здоровья в шапке -> открываем советник
+      // Клик по бейджу здоровья в шапке -> открываем экран Edge AI Vision
       if (x >= 118 && x <= 212 && y < HEADER_H) {
-        currentScreen = SCR_ADVISOR;
-        drawAdvisorScreen();
+        currentScreen = SCR_VISION;
+        drawVisionScreen();
         return;
       }
       // 1. Тап по карточке pH (x: 8..156, y: 42..94)
@@ -2476,9 +2857,10 @@ void handleTouches() {
         drawSproutScreen();
         return;
       }
-      // Кнопка 3: [ PLAY MINI-GAME ] (y: 176..204)
+      // Кнопка 3: [ AI PLANT VISION > ] (y: 176..204)
       else if (x >= 150 && x <= 312 && y >= 176 && y <= 204) {
-        startMiniGame();
+        currentScreen = SCR_VISION;
+        drawVisionScreen();
         return;
       }
       // Тап по персонажу -> поглаживание
@@ -2556,6 +2938,26 @@ void handleTouches() {
       if (x < 50 && y < HEADER_H) {
         currentScreen = SCR_HOME;
         drawHomeScreen();
+        return;
+      } else if (y >= 42 && y <= 90) {
+        currentScreen = SCR_VISION;
+        drawVisionScreen();
+        return;
+      }
+    }
+  }
+  else if (currentScreen == SCR_VISION) {
+    if (gesture == GESTURE_TAP) {
+      // Кнопка назад в шапке или [ BACK TO HOME ] (x: 8..152, y: 206..234)
+      if ((x < 50 && y < HEADER_H) || (x >= 8 && x <= 152 && y >= 206 && y <= 234)) {
+        currentScreen = SCR_HOME;
+        drawHomeScreen();
+        return;
+      }
+      // Кнопка [ SNAP & DIAGNOSE ] (x: 160..312, y: 206..234)
+      else if (x >= 160 && x <= 312 && y >= 206 && y <= 234) {
+        Serial.println("{\"type\":\"cmd\",\"action\":\"diagnose\"}");
+        drawPill(160, 206, 152, 28, "REQUESTED...", theme.ok, theme.surfaceHi, theme.primary);
         return;
       }
     }
@@ -2776,6 +3178,7 @@ void setup() {
 unsigned long lastSensorPoll = 0;
 
 void loop() {
+  processSerialCommunication();
   if (!isCalibrated) return;
   handleTouches();
 
