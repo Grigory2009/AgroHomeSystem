@@ -408,6 +408,139 @@ AGRONOMIC_KNOWLEDGE_BASE: Dict[str, Dict[str, Any]] = {
 
 
 @dataclass
+class CropPreset:
+    """Agronomic and vision configuration preset for a specific plant culture."""
+    id: str
+    name_ru: str
+    name_en: str
+    scientific_name: str
+    icon: str
+    category: str  # "microgreens", "solanaceae", "berries", "herbs", "all"
+    optimal_ph: Tuple[float, float]
+    optimal_tds: Tuple[int, int]
+    optimal_water_temp: Tuple[float, float]
+    optimal_air_temp: Tuple[float, float]
+    optimal_vpd: Tuple[float, float]
+    growth_days: int
+    min_leaf_area: int
+    filter_keywords: List[str]
+    description_ru: str
+    description_en: str
+
+
+CROP_PRESETS: Dict[str, CropPreset] = {
+    "watercress": CropPreset(
+        id="watercress",
+        name_ru="Кресс-салат",
+        name_en="Watercress",
+        scientific_name="Lepidium sativum",
+        icon="🌱",
+        category="microgreens",
+        optimal_ph=(6.0, 6.8),
+        optimal_tds=(400, 800),
+        optimal_water_temp=(18.0, 22.0),
+        optimal_air_temp=(18.0, 22.0),
+        optimal_vpd=(0.6, 0.9),
+        growth_days=12,
+        min_leaf_area=120,
+        filter_keywords=["cress", "salad", "microgreen", "leaf"],
+        description_ru="Скороспелая микрозелень. Идеальна для домашней гидропоники: сбор через 10-14 дней при нежной зелени.",
+        description_en="Ultra-fast microgreen. Harvest in 10-14 days with delicate tender leaves."
+    ),
+    "tomato": CropPreset(
+        id="tomato",
+        name_ru="Томат Черри",
+        name_en="Cherry Tomato",
+        scientific_name="Solanum lycopersicum",
+        icon="🍅",
+        category="solanaceae",
+        optimal_ph=(5.8, 6.5),
+        optimal_tds=(800, 1400),
+        optimal_water_temp=(19.0, 23.0),
+        optimal_air_temp=(21.0, 26.0),
+        optimal_vpd=(0.8, 1.2),
+        growth_days=75,
+        min_leaf_area=400,
+        filter_keywords=["tomato"],
+        description_ru="Культура томатов. Требует интенсивного освещения и сбалансированного калийно-фосфорного питания.",
+        description_en="Classic indoor tomato. Requires high PPFD lighting and potassium-rich feeding."
+    ),
+    "pepper": CropPreset(
+        id="pepper",
+        name_ru="Сладкий перец",
+        name_en="Bell Pepper",
+        scientific_name="Capsicum annuum",
+        icon="🫑",
+        category="solanaceae",
+        optimal_ph=(5.8, 6.3),
+        optimal_tds=(900, 1300),
+        optimal_water_temp=(20.0, 24.0),
+        optimal_air_temp=(22.0, 27.0),
+        optimal_vpd=(0.9, 1.2),
+        growth_days=80,
+        min_leaf_area=400,
+        filter_keywords=["pepper"],
+        description_ru="Теплолюбивая культура. Чувствительна к застою влаги в корнях и резким колебаниям температуры.",
+        description_en="Warm-climate crop. Sensitive to root zone saturation and thermal swings."
+    ),
+    "strawberry": CropPreset(
+        id="strawberry",
+        name_ru="Земляника/Клубника",
+        name_en="Strawberry",
+        scientific_name="Fragaria ananassa",
+        icon="🍓",
+        category="berries",
+        optimal_ph=(5.5, 6.2),
+        optimal_tds=(600, 1000),
+        optimal_water_temp=(18.0, 21.0),
+        optimal_air_temp=(19.0, 24.0),
+        optimal_vpd=(0.7, 1.0),
+        growth_days=60,
+        min_leaf_area=350,
+        filter_keywords=["strawberry"],
+        description_ru="Ягодная культура для гидропонных систем. Требует умеренной ЕС и стабильного pH.",
+        description_en="Hydroponic berry crop. Requires moderate EC, stable root pH, and clean air circulation."
+    ),
+    "basil": CropPreset(
+        id="basil",
+        name_ru="Базилик",
+        name_en="Sweet Basil",
+        scientific_name="Ocimum basilicum",
+        icon="🌿",
+        category="herbs",
+        optimal_ph=(5.5, 6.5),
+        optimal_tds=(550, 900),
+        optimal_water_temp=(20.0, 23.0),
+        optimal_air_temp=(22.0, 26.0),
+        optimal_vpd=(0.7, 1.1),
+        growth_days=28,
+        min_leaf_area=300,
+        filter_keywords=["basil", "leaf"],
+        description_ru="Ароматическая пряная трава. Быстрый вегетативный цикл, регулярная срезка верхушек для кущения.",
+        description_en="Aromatic herb. Fast vegetative growth, benefits from regular apex pruning."
+    ),
+    "auto": CropPreset(
+        id="auto",
+        name_ru="Авто-определение",
+        name_en="Auto Detect",
+        scientific_name="Multi-Crop AI",
+        icon="🤖",
+        category="all",
+        optimal_ph=(5.8, 6.5),
+        optimal_tds=(700, 1200),
+        optimal_water_temp=(19.0, 23.0),
+        optimal_air_temp=(20.0, 25.0),
+        optimal_vpd=(0.8, 1.2),
+        growth_days=60,
+        min_leaf_area=400,
+        filter_keywords=[],
+        description_ru="Автоматический выбор культуры по визуальным признакам и базе 38 заболеваний.",
+        description_en="Full-spectrum automatic crop identification and disease diagnosis."
+    )
+}
+
+
+@dataclass
 class LeafMetrics:
     """Biophysical metrics computed directly from foliage spectrum."""
     total_leaf_pixels: int = 0
@@ -437,6 +570,7 @@ class DiagnosisResult:
     metrics: LeafMetrics
     top_candidates: List[Dict[str, Any]] = field(default_factory=list)
     processing_time_ms: float = 0.0
+    crop_preset: str = "auto"
 
 
 class FoliageSegmenter:
@@ -683,7 +817,12 @@ class DiseaseClassifier:
         batch = np.expand_dims(chw, axis=0).astype(np.float32)
         return batch
 
-    def predict(self, bgr_img: np.ndarray, top_k: int = 5) -> Tuple[str, float, List[Dict[str, Any]], float]:
+    def predict(
+        self,
+        bgr_img: np.ndarray,
+        top_k: int = 5,
+        crop_filter: Optional[List[str]] = None
+    ) -> Tuple[str, float, List[Dict[str, Any]], float]:
         input_tensor = self.preprocess(bgr_img)
         t0 = time.perf_counter()
 
@@ -713,6 +852,19 @@ class DiseaseClassifier:
 
         exp_logits = np.exp(logits - np.max(logits))
         probabilities = exp_logits / np.sum(exp_logits)
+
+        # Применение байесовского взвешивания априорных вероятностей для выбранного пресета культуры
+        if crop_filter:
+            kw_list = [k.lower() for k in crop_filter]
+            priors = np.ones_like(probabilities)
+            for i, lbl in enumerate(self.labels):
+                lbl_lower = lbl.lower()
+                kb = AGRONOMIC_KNOWLEDGE_BASE.get(lbl, {})
+                crop_lower = kb.get("crop_en", "").lower() + " " + kb.get("crop", "").lower()
+                if any(k in lbl_lower or k in crop_lower for k in kw_list):
+                    priors[i] = 4.0
+            probabilities = (probabilities * priors)
+            probabilities /= np.sum(probabilities)
 
         top_indices = np.argsort(probabilities)[::-1][:top_k]
         top_candidates = []
@@ -775,10 +927,94 @@ class PlantHealthDetector:
         score = base_score - chlorosis_penalty - necrosis_penalty + (green_bonus if is_healthy else 0)
         return float(np.clip(round(score, 1), 0.0, 100.0))
 
+    def _diagnose_watercress(
+        self,
+        img_bgr: np.ndarray,
+        metrics: LeafMetrics,
+        t_start: float
+    ) -> DiagnosisResult:
+        """
+        Специализированная диагностика для тестового пресета Кресс-салата (Microgreens / Lepidium sativum).
+        Анализирует плотность прорастания семян, полегание всходов (черную ножку), хлороз семядолей и некроз.
+        """
+        if metrics.total_leaf_pixels < 150 or metrics.leaf_area_ratio < 0.005:
+            raw_label = "Watercress Germination"
+            disease_ru = "Фаза всходов (Прорастание семян)"
+            is_healthy = True
+            confidence = 98.5
+            health_index = 97.0
+            severity = "None"
+            pathogen = "None"
+            treatment = "Семена кресс-салата активно проклевываются. Поддерживайте влажность 60-70% и мягкий рассеянный свет."
+            prevention = "Не переувлажнять субстрат в первые 3 дня."
+
+        elif metrics.necrosis_ratio > 0.035:
+            raw_label = "Watercress Damping-Off"
+            disease_ru = "Черная ножка (Полегание микрозелени)"
+            is_healthy = False
+            confidence = 94.0
+            health_index = float(np.clip(round(75.0 - metrics.necrosis_ratio * 350.0, 1), 10.0, 60.0))
+            severity = "Severe"
+            pathogen = "Pythium / Rhizoctonia (Оомицет / Грибок)"
+            treatment = "Срочно включить вентилятор обдува! Снизить влажность до 50%, дать субстрату слегка просохнуть. Обработать Фитоспорином-М или биофунгицидом Триходерма."
+            prevention = "Обеспечить постоянную циркуляцию воздуха, не загущать посев семян, температура воды 18-20°C."
+
+        elif metrics.chlorosis_ratio > 0.05:
+            raw_label = "Watercress Chlorosis"
+            disease_ru = "Хлороз микрозелени (Дефицит железа/азота)"
+            is_healthy = False
+            confidence = 91.5
+            health_index = float(np.clip(round(85.0 - metrics.chlorosis_ratio * 250.0, 1), 30.0, 75.0))
+            severity = "Moderate"
+            pathogen = "Nutrient Deficiency (pH > 6.8 или TDS < 350 ppm)"
+            treatment = "Проверьте pH и TDS: для кресс-салата норма pH 6.0-6.8, TDS 400-600 ppm. Добавьте хелат железа Fe-DTPA в гидропонный раствор."
+            prevention = "Своевременная замена питательного раствора, контроль уровня EC."
+
+        else:
+            raw_label = "Healthy Watercress"
+            disease_ru = "Здоровый кресс-салат (Микрозелень)"
+            is_healthy = True
+            confidence = 97.8
+            health_index = float(np.clip(round(92.0 + metrics.healthy_green_ratio * 8.0 - metrics.chlorosis_ratio * 30.0, 1), 85.0, 100.0))
+            severity = "None"
+            pathogen = "None"
+            treatment = "Кресс-салат в отличной форме! Листовые пластины сочные, изумрудного цвета. Готов к употреблению через 3-5 дней."
+            prevention = "Поддерживать стабильную температуру воды 18-22°C и световой день 14-16 часов."
+
+        total_time_ms = (time.perf_counter() - t_start) * 1000.0
+
+        return DiagnosisResult(
+            raw_label=raw_label,
+            crop_ru="Кресс-салат",
+            crop_en="Watercress",
+            disease_ru=disease_ru,
+            is_healthy=is_healthy,
+            confidence=round(confidence, 1),
+            health_index=health_index,
+            severity=severity,
+            pathogen=pathogen,
+            treatment=treatment,
+            prevention=prevention,
+            metrics=metrics,
+            top_candidates=[
+                {
+                    "label": raw_label,
+                    "confidence": round(confidence / 100.0, 4),
+                    "crop_ru": "Кресс-салат",
+                    "disease_ru": disease_ru,
+                    "is_healthy": is_healthy,
+                    "severity": severity
+                }
+            ],
+            processing_time_ms=round(total_time_ms, 2),
+            crop_preset="watercress"
+        )
+
     def diagnose(
         self,
         image: Union[np.ndarray, str, Path],
-        apply_crop: bool = True
+        apply_crop: bool = True,
+        crop_preset: str = "auto"
     ) -> DiagnosisResult:
         t_start = time.perf_counter()
 
@@ -791,10 +1027,16 @@ class PlantHealthDetector:
 
         h, w = img_bgr.shape[:2]
 
+        preset = CROP_PRESETS.get(crop_preset, CROP_PRESETS["auto"])
+        min_area = preset.min_leaf_area if preset else self.segmenter.min_leaf_area
         mask, metrics, boxes = self.segmenter.segment(img_bgr)
 
+        # Специализированная диагностика микрозелени для пресета Кресс-салата
+        if crop_preset == "watercress":
+            return self._diagnose_watercress(img_bgr, metrics, t_start)
+
         target_crop = img_bgr
-        if apply_crop and metrics.total_leaf_pixels >= self.segmenter.min_leaf_area:
+        if apply_crop and metrics.total_leaf_pixels >= min_area:
             x1, y1, x2, y2 = metrics.bounding_box
             pad = 10
             x1 = max(0, x1 - pad)
@@ -804,11 +1046,15 @@ class PlantHealthDetector:
             if (x2 - x1) > 20 and (y2 - y1) > 20:
                 target_crop = img_bgr[y1:y2, x1:x2]
 
-        best_label, confidence, top_candidates, cls_time_ms = self.classifier.predict(target_crop)
+        crop_filter = preset.filter_keywords if (preset and preset.filter_keywords) else None
+        best_label, confidence, top_candidates, cls_time_ms = self.classifier.predict(
+            target_crop,
+            crop_filter=crop_filter
+        )
 
         kb = AGRONOMIC_KNOWLEDGE_BASE.get(best_label, {
-            "crop": "Неизвестно",
-            "crop_en": "Unknown",
+            "crop": preset.name_ru if (preset and preset.id != "auto") else "Неизвестно",
+            "crop_en": preset.name_en if (preset and preset.id != "auto") else "Unknown",
             "disease_ru": best_label,
             "is_healthy": False,
             "severity": "Unknown",
@@ -836,7 +1082,8 @@ class PlantHealthDetector:
             prevention=kb.get("prevention", ""),
             metrics=metrics,
             top_candidates=top_candidates,
-            processing_time_ms=round(total_time_ms, 2)
+            processing_time_ms=round(total_time_ms, 2),
+            crop_preset=crop_preset
         )
 
     def draw_hud(

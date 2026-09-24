@@ -28,6 +28,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from dataclasses import asdict
 from urllib.parse import urlparse, parse_qs
 
 # UTF-8 output
@@ -44,7 +45,7 @@ import numpy as np
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from plant_health_engine import PlantHealthDetector, DiagnosisResult, AGRONOMIC_KNOWLEDGE_BASE
+from plant_health_engine import PlantHealthDetector, DiagnosisResult, AGRONOMIC_KNOWLEDGE_BASE, CROP_PRESETS
 from esp_bridge import EspBridge, determine_growth_stage, get_rpi_cpu_temperature
 
 
@@ -74,26 +75,28 @@ class SystemHub:
         self.logs: List[Dict[str, Any]] = []
         self.max_logs = 60
 
-        # Состояние растения и агрономии
-        self.growth_percent = 45.0
-        self.crop_name = "Томат Черри"
+        # Состояние растения, агрономии и активного пресета
+        self.active_preset = "watercress"  # Пресет по умолчанию (Тестовый пресет для микрозелени)
+        self.growth_percent = 35.0
+        self.crop_name = "Кресс-салат"
         self.view_mode = "rgb"  # rgb, exg, split
 
         # Последний результат диагностики
         self.last_diagnosis = {
-            "crop": "Томат Черри",
-            "diagnosis": "Здоровое растение",
-            "diagnosis_en": "Healthy Tomato",
+            "crop": "Кресс-салат",
+            "crop_en": "Watercress",
+            "diagnosis": "Здоровый кресс-салат",
+            "diagnosis_en": "Healthy Watercress",
             "confidence": 98.6,
             "health_score": 96.0,
-            "biomass": 38.5,
-            "chlorosis": 1.2,
+            "biomass": 34.5,
+            "chlorosis": 1.1,
             "necrosis": 0.1,
             "severity": "None",
-            "advice": "Растение развивается гармонично. Рекомендуемый VPD: 0.9-1.1 кПа.",
-            "advice_en": "Optimal photosynthesis! Recommended VPD: 0.9-1.1 kPa.",
-            "inference_ms": 48.5,
-            "fps": 20.6,
+            "advice": "Листовой полог сочный, яркий изумрудный цвет. Рекомендуемый VPD: 0.6-0.9 кПа, pH 6.0-6.8.",
+            "advice_en": "Tender emerald foliage. Optimal VPD: 0.6-0.9 kPa, pH 6.0-6.8.",
+            "inference_ms": 28.5,
+            "fps": 24.0,
             "timestamp": time.time()
         }
 
@@ -159,6 +162,8 @@ class SystemHub:
     def _on_esp_command(self, action: str, data: Dict[str, Any]):
         """Callback приема команд от кнопок ESP32."""
         self.log(f"Команда от ESP32: action={action}", "action")
+        if action == "reset_sprout":
+            self.reset_sprout()
 
     def _init_camera(self):
         """Открытие физической камеры или переключение на демо-лист."""
@@ -301,7 +306,7 @@ class SystemHub:
 
                 if frame_to_diagnose is not None and self.detector:
                     t0 = time.time()
-                    res: DiagnosisResult = self.detector.diagnose(frame_to_diagnose)
+                    res: DiagnosisResult = self.detector.diagnose(frame_to_diagnose, crop_preset=self.active_preset)
                     infer_time = (time.time() - t0) * 1000.0
 
                     with self.lock:
@@ -346,6 +351,8 @@ class SystemHub:
         with self.lock:
             d = self.last_diagnosis
             growth = self.growth_percent
+            preset = CROP_PRESETS.get(self.active_preset)
+            crop_name_display = preset.name_ru if preset else d["crop"]
 
         stage_info = determine_growth_stage(growth)
 
@@ -355,7 +362,7 @@ class SystemHub:
             biomass=d["biomass"],
             chlorosis=d["chlorosis"],
             necrosis=d["necrosis"],
-            crop=d["crop"],
+            crop=crop_name_display,
             diagnosis=d["diagnosis"],
             confidence=d["confidence"],
             severity=d["severity"],
@@ -365,7 +372,7 @@ class SystemHub:
             stage_name=stage_info["name_ru"]
         )
         if success:
-            self.log(f"-> Синхронизировано с ESP32: Рост={growth}% | Здоровье={d['health_score']}%", "success")
+            self.log(f"-> Синхронизировано с ESP32: Культура={crop_name_display} | Рост={growth}% | Здоровье={d['health_score']}%", "success")
         return success
 
     def toggle_pump(self) -> bool:
@@ -393,6 +400,16 @@ class SystemHub:
         self.log(f"Прогресс роста изменен пользователем: {self.growth_percent:.1f}%", "info")
         self.sync_with_esp32()
 
+    def reset_sprout(self):
+        """Сбросить уровень тамагочи-растения до 1 и вернуть к стадии проростка."""
+        with self.lock:
+            self.growth_percent = 5.0
+            self.last_diagnosis["health_score"] = 99.0
+        self.log("Сброс уровня тамагочи: растение переведено на стадию 1 (Проросток, 5% развития)", "action")
+        if self.bridge:
+            self.bridge.send_command("reset_sprout")
+        self.sync_with_esp32()
+
     def pet_plant(self):
         """Отправить сигнал заботы о растении."""
         self.log("Пользователь погладил растение! Отправка команды на дисплей инкубатора...", "action")
@@ -408,6 +425,7 @@ class SystemHub:
         esp_telemetry = self.bridge.get_telemetry() if self.bridge else {}
 
         with self.lock:
+            current_preset_obj = CROP_PRESETS.get(self.active_preset, CROP_PRESETS["watercress"])
             state = {
                 "timestamp": time.time(),
                 "rpi": {
@@ -434,8 +452,29 @@ class SystemHub:
                     "stage_name_ru": stage_info["name_ru"],
                     "stage_name_en": stage_info["name_en"],
                     "view_mode": self.view_mode,
+                    "crop_preset": self.active_preset,
+                    "crop_preset_name": current_preset_obj.name_ru,
+                    "crop_preset_icon": current_preset_obj.icon,
+                    "crop_preset_ph": f"{current_preset_obj.optimal_ph[0]:.1f} - {current_preset_obj.optimal_ph[1]:.1f}",
+                    "crop_preset_tds": f"{current_preset_obj.optimal_tds[0]} - {current_preset_obj.optimal_tds[1]} ppm",
+                    "crop_preset_vpd": f"{current_preset_obj.optimal_vpd[0]:.1f} - {current_preset_obj.optimal_vpd[1]:.1f} kPa",
+                    "crop_preset_days": current_preset_obj.growth_days,
                     **self.last_diagnosis
                 },
+                "presets": [
+                    {
+                        "id": p.id,
+                        "name_ru": p.name_ru,
+                        "name_en": p.name_en,
+                        "icon": p.icon,
+                        "ph": f"{p.optimal_ph[0]:.1f}-{p.optimal_ph[1]:.1f}",
+                        "tds": f"{p.optimal_tds[0]}-{p.optimal_tds[1]}",
+                        "vpd": f"{p.optimal_vpd[0]:.1f}-{p.optimal_vpd[1]:.1f}",
+                        "days": p.growth_days,
+                        "desc": p.description_ru
+                    }
+                    for p in CROP_PRESETS.values()
+                ],
                 "logs": list(self.logs[-15:])
             }
         return state
@@ -595,6 +634,43 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
             if hub:
                 hub.pet_plant()
                 self._send_json({"status": "ok", "message": "Растение счастливо!"})
+            else:
+                self._send_json({"error": "no hub"}, 500)
+
+        # 6. Выбор пресета агрокультуры для оптимизации распознавания
+        elif path == "/api/crop/preset":
+            preset_id = str(post_data.get("preset", "watercress")).lower()
+            if preset_id in CROP_PRESETS:
+                if hub:
+                    with hub.lock:
+                        hub.active_preset = preset_id
+                        p = CROP_PRESETS[preset_id]
+                        hub.crop_name = p.name_ru
+                    hub.log(f"Выбран пресет растения: {p.icon} {p.name_ru} ({p.name_en})", "action")
+                    hub.sync_with_esp32()
+                    self._send_json({
+                        "status": "ok",
+                        "preset": preset_id,
+                        "name_ru": p.name_ru,
+                        "icon": p.icon,
+                        "preset_info": asdict(p)
+                    })
+                else:
+                    self._send_json({"error": "no hub"}, 500)
+            else:
+                self._send_json({"error": "unknown preset"}, 400)
+
+        # 7. Сброс уровня и прогресса тамагочи-растения
+        elif path == "/api/sprout/reset":
+            if hub:
+                hub.reset_sprout()
+                st = determine_growth_stage(hub.growth_percent)
+                self._send_json({
+                    "status": "ok",
+                    "message": "Уровень и прогресс ростка сброшены",
+                    "growth": hub.growth_percent,
+                    "stage": st["stage"]
+                })
             else:
                 self._send_json({"error": "no hub"}, 500)
 
@@ -1161,6 +1237,69 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       font-weight: 700;
     }
 
+    /* CROP PRESETS */
+    .crop-preset-container {
+      margin-top: 1.25rem;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-md);
+      padding: 0.9rem;
+    }
+
+    .crop-preset-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .preset-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    .preset-chip {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.78rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: var(--transition);
+      font-family: inherit;
+    }
+
+    .preset-chip:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-main);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .preset-chip.active {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: var(--accent-green);
+      color: #34d399;
+      font-weight: 600;
+      box-shadow: 0 0 12px rgba(16, 185, 129, 0.25);
+    }
+
+    .preset-info-banner {
+      margin-top: 0.65rem;
+      padding: 0.45rem 0.65rem;
+      background: rgba(16, 185, 129, 0.06);
+      border-left: 3px solid var(--accent-green);
+      border-radius: 4px;
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
     /* LOGS PANEL */
     .logs-panel {
       font-family: 'JetBrains Mono', monospace;
@@ -1321,6 +1460,50 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           <span>❤️</span>
           <span id="txt-pet-btn">Погладить растение</span>
         </button>
+        <button class="btn-action" onclick="resetSproutLevel()" title="Сбросить уровень тамагочи-растения до 1 (стадия проростка)">
+          <span>🔄</span>
+          <span id="txt-reset-sprout-btn">Сброс уровня</span>
+        </button>
+      </div>
+
+      <!-- CROP PRESET SELECTOR -->
+      <div class="crop-preset-container">
+        <div class="crop-preset-header">
+          <div style="font-weight: 700; font-size: 0.88rem; display: flex; align-items: center; gap: 6px;">
+            <span>🌱</span>
+            <span id="txt-preset-title">Пресет культуры для точного распознавания:</span>
+          </div>
+          <span class="badge" style="background: rgba(16, 185, 129, 0.15); color: var(--accent-green); border: 1px solid rgba(16, 185, 129, 0.3);" id="active-preset-badge">Кресс-салат (Тест)</span>
+        </div>
+        <div class="preset-chips">
+          <button class="preset-chip active" onclick="setCropPreset('watercress')" id="preset-btn-watercress">
+            <span>🌱</span>
+            <span>Кресс-салат (Тест)</span>
+          </button>
+          <button class="preset-chip" onclick="setCropPreset('tomato')" id="preset-btn-tomato">
+            <span>🍅</span>
+            <span>Томат Черри</span>
+          </button>
+          <button class="preset-chip" onclick="setCropPreset('pepper')" id="preset-btn-pepper">
+            <span>🫑</span>
+            <span>Сладкий перец</span>
+          </button>
+          <button class="preset-chip" onclick="setCropPreset('strawberry')" id="preset-btn-strawberry">
+            <span>🍓</span>
+            <span>Клубника</span>
+          </button>
+          <button class="preset-chip" onclick="setCropPreset('basil')" id="preset-btn-basil">
+            <span>🌿</span>
+            <span>Базилик</span>
+          </button>
+          <button class="preset-chip" onclick="setCropPreset('auto')" id="preset-btn-auto">
+            <span>🤖</span>
+            <span>Авто-AI</span>
+          </button>
+        </div>
+        <div class="preset-info-banner" id="preset-info-banner">
+          ⚡ <strong>Кресс-салат (Микрозелень):</strong> Оптимум pH 6.0-6.8 | TDS 400-800 ppm | VPD 0.6-0.9 kPa | Быстрый сбор: 10-14 дней
+        </div>
       </div>
 
       <!-- TIMELINE LIFECYCLE -->
@@ -1475,6 +1658,8 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         sensorsTitle: "Телеметрия ESP32-S3 и Инкубатора",
         logsTitle: "Журнал событий реального времени",
         lifecycleTitle: "Жизненный цикл агрокультуры",
+        presetTitle: "Пресет культуры для точного распознавания:",
+        resetSproutBtn: "Сброс уровня",
         syncBtn: "Отправить на экран ESP32",
         petBtn: "Погладить растение",
         healthLbl: "Здоровье",
@@ -1495,6 +1680,8 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         sensorsTitle: "ESP32-S3 Telemetry & Hydroponics",
         logsTitle: "Real-time Event Journal",
         lifecycleTitle: "Crop Growth Lifecycle",
+        presetTitle: "Plant Culture Preset for Accurate AI Recognition:",
+        resetSproutBtn: "Reset Sprout Lvl",
         syncBtn: "Push to ESP32 Display",
         petBtn: "Pet Plant",
         healthLbl: "Health",
@@ -1524,6 +1711,10 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('txt-sensors-title').innerText = t.sensorsTitle;
       document.getElementById('txt-logs-title').innerText = t.logsTitle;
       document.getElementById('txt-lifecycle-title').innerText = t.lifecycleTitle;
+      const pTitle = document.getElementById('txt-preset-title');
+      if (pTitle) pTitle.innerText = t.presetTitle;
+      const rSprout = document.getElementById('txt-reset-sprout-btn');
+      if (rSprout) rSprout.innerText = t.resetSproutBtn;
       document.getElementById('txt-sync-btn').innerText = t.syncBtn;
       document.getElementById('txt-pet-btn').innerText = t.petBtn;
       document.getElementById('txt-health-lbl').innerText = t.healthLbl;
@@ -1654,7 +1845,25 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         if (el) el.classList.toggle('current', data.plant.stage === i);
       }
 
-      // 7. Event logs
+      // 7. Crop Preset UI
+      if (data.plant.crop_preset) {
+        document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
+        const activeChip = document.getElementById(`preset-btn-${data.plant.crop_preset}`);
+        if (activeChip) activeChip.classList.add('active');
+        const badge = document.getElementById('active-preset-badge');
+        if (badge && data.plant.crop_preset_name) {
+          badge.innerText = `${data.plant.crop_preset_icon || '🌱'} ${data.plant.crop_preset_name}`;
+        }
+        const banner = document.getElementById('preset-info-banner');
+        if (banner && data.plant.crop_preset_ph) {
+          banner.innerHTML = `⚡ <strong>${data.plant.crop_preset_name}:</strong> Оптимум pH ${data.plant.crop_preset_ph} | TDS ${data.plant.crop_preset_tds} | VPD ${data.plant.crop_preset_vpd} | Срок: ${data.plant.crop_preset_days} дней`;
+        }
+        if (data.plant.crop_preset_ph) document.getElementById('lbl-ph-sub').innerText = `Норма: ${data.plant.crop_preset_ph}`;
+        if (data.plant.crop_preset_tds) document.getElementById('lbl-tds-sub').innerText = `Оптимум: ${data.plant.crop_preset_tds}`;
+        if (data.plant.crop_preset_vpd) document.getElementById('lbl-vpd-sub').innerText = `Оптимум: ${data.plant.crop_preset_vpd}`;
+      }
+
+      // 8. Event logs
       if (data.logs && data.logs.length > 0) {
         const container = document.getElementById('logs-list');
         container.innerHTML = data.logs.map(l => `
@@ -1671,6 +1880,37 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     }
 
     // ACTIONS
+    async function setCropPreset(presetId) {
+      document.querySelectorAll('.preset-chip').forEach(c => c.classList.remove('active'));
+      const chip = document.getElementById(`preset-btn-${presetId}`);
+      if (chip) chip.classList.add('active');
+
+      try {
+        const res = await fetch('/api/crop/preset', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({preset: presetId})
+        });
+        const data = await res.json();
+        if (data && data.name_ru) {
+          showToast(`🌱 Выбран пресет: ${data.name_ru}`);
+        }
+        fetchState();
+      } catch (e) {
+        console.error('Preset change error:', e);
+      }
+    }
+
+    async function resetSproutLevel() {
+      try {
+        const res = await fetch('/api/sprout/reset', {method: 'POST'});
+        showToast('🔄 Уровень тамагочи сброшен на Уровень 1 (Проросток)!');
+        fetchState();
+      } catch (e) {
+        console.error('Reset sprout error:', e);
+      }
+    }
+
     async function setVideoMode(mode) {
       document.querySelectorAll('.btn-tab').forEach(b => b.classList.remove('active'));
       document.getElementById(`btn-mode-${mode}`).classList.add('active');

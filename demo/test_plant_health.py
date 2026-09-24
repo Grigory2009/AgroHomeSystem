@@ -24,7 +24,8 @@ from plant_health_engine import (
     PlantHealthDetector,
     DiagnosisResult,
     LeafMetrics,
-    AGRONOMIC_KNOWLEDGE_BASE
+    AGRONOMIC_KNOWLEDGE_BASE,
+    CROP_PRESETS
 )
 
 
@@ -166,6 +167,36 @@ class TestPlantHealthEngine(unittest.TestCase):
             self.assertTrue(0.0 <= result.health_index <= 100.0)
         except Exception as e:
             self.fail(f"Detector crashed on white image: {e}")
+
+    def test_crop_presets_and_watercress(self):
+        """Test crop presets configuration and specialized watercress microgreens diagnosis."""
+        self.assertIn("watercress", CROP_PRESETS)
+        self.assertIn("tomato", CROP_PRESETS)
+        self.assertIn("pepper", CROP_PRESETS)
+        self.assertIn("strawberry", CROP_PRESETS)
+        self.assertIn("basil", CROP_PRESETS)
+
+        watercress_preset = CROP_PRESETS["watercress"]
+        self.assertEqual(watercress_preset.name_ru, "Кресс-салат")
+        self.assertEqual(watercress_preset.category, "microgreens")
+        self.assertEqual(watercress_preset.growth_days, 12)
+        self.assertTupleEqual(watercress_preset.optimal_ph, (6.0, 6.8))
+
+        detector = PlantHealthDetector(backend="auto")
+
+        # Test watercress preset diagnosis
+        res_cress = detector.diagnose(self.test_img, crop_preset="watercress")
+        self.assertIsNotNone(res_cress)
+        self.assertEqual(res_cress.crop_ru, "Кресс-салат")
+        self.assertEqual(res_cress.crop_en, "Watercress")
+        self.assertTrue(0.0 <= res_cress.health_index <= 100.0)
+        self.assertTrue(len(res_cress.treatment) > 0)
+
+        # Test tomato preset diagnosis
+        res_tomato = detector.diagnose(self.test_img, crop_preset="tomato")
+        self.assertIsNotNone(res_tomato)
+        self.assertEqual(res_tomato.crop_preset, "tomato")
+        self.assertTrue(0.0 <= res_tomato.health_index <= 100.0)
 
 
 if __name__ == "__main__":

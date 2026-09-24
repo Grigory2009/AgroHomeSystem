@@ -105,6 +105,70 @@ LIFECYCLE_SCENARIOS = [
 ]
 
 
+WATERCRESS_SCENARIOS = [
+    {
+        "name": "Фаза 1: Всходы семян кресс-салата (Day 2)",
+        "day": 2,
+        "growth": 15.0,
+        "health": 98.5,
+        "biomass": 12.0,
+        "chlorosis": 0.5,
+        "necrosis": 0.0,
+        "crop": "Кресс-салат",
+        "diagnosis": "Здоровые всходы",
+        "confidence": 99.2,
+        "severity": "None",
+        "advice": "Семена проклюнулись. Влажность 65%, мягкий свет 14ч. Режим полива умеренный.",
+        "duration": 5
+    },
+    {
+        "name": "Фаза 2: Быстрое разрастание микрозелени (Day 6)",
+        "day": 6,
+        "growth": 52.0,
+        "health": 97.0,
+        "biomass": 46.5,
+        "chlorosis": 1.2,
+        "necrosis": 0.1,
+        "crop": "Кресс-салат",
+        "diagnosis": "Здоровый кресс-салат",
+        "confidence": 98.7,
+        "severity": "None",
+        "advice": "Интенсивный рост семядолей! TDS 500 ppm, pH 6.3. Отличный тургор стеблей.",
+        "duration": 5
+    },
+    {
+        "name": "Фаза 3: Внимание: Загущение и риск черной ножки (Day 8)",
+        "day": 8,
+        "growth": 72.0,
+        "health": 76.0,
+        "biomass": 68.0,
+        "chlorosis": 8.5,
+        "necrosis": 4.2,
+        "crop": "Кресс-салат",
+        "diagnosis": "Угроза переувлажнения",
+        "confidence": 92.4,
+        "severity": "Moderate",
+        "advice": "Включите вентилятор обдува микрозелени! Снизьте влажность до 55% во избежание черной ножки.",
+        "duration": 5
+    },
+    {
+        "name": "Фаза 4: Готовность к сбору урожая (Day 11)",
+        "day": 11,
+        "growth": 98.0,
+        "health": 96.5,
+        "biomass": 88.0,
+        "chlorosis": 1.0,
+        "necrosis": 0.0,
+        "crop": "Кресс-салат",
+        "diagnosis": "Здоровый кресс-салат",
+        "confidence": 99.0,
+        "severity": "None",
+        "advice": "Кресс-салат готов к употреблению! Максимум витаминов C и микроэлементов. Срежьте ножницами.",
+        "duration": 5
+    }
+]
+
+
 def print_banner():
     print("""
 ╔══════════════════════════════════════════════════════════════════╗
@@ -124,11 +188,14 @@ def main():
     parser.add_argument("--port", type=str, default="auto", help="Serial port (auto, COM3, /dev/ttyACM0)")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
     parser.add_argument("--ip", type=str, default=None, help="ESP32 IP for HTTP mode")
+    parser.add_argument("--preset", type=str, default="watercress", choices=["watercress", "tomato"], help="Crop preset (watercress / tomato)")
     parser.add_argument("--interval", type=float, default=5.0, help="Seconds per lifecycle stage")
     parser.add_argument("--repeat", "--loop", dest="repeat", action="store_true", help="Loop scenarios continuously")
     args = parser.parse_args()
 
     print_banner()
+    scenarios = WATERCRESS_SCENARIOS if args.preset == "watercress" else LIFECYCLE_SCENARIOS
+    print(f"Активный пресет симуляции: {'🌱 Кресс-салат (Микрозелень)' if args.preset == 'watercress' else '🍅 Томат Черри'}")
 
     bridge = EspBridge(
         port=args.port,
@@ -140,8 +207,8 @@ def main():
     try:
         round_idx = 1
         while True:
-            print(f"\n>>> Запуск жизненного цикла агрокультуры (Раунд #{round_idx}) <<<\n")
-            for sc in LIFECYCLE_SCENARIOS:
+            print(f"\n>>> Запуск жизненного цикла агрокультуры: {args.preset.upper()} (Раунд #{round_idx}) <<<\n")
+            for sc in scenarios:
                 stage_info = determine_growth_stage(sc["growth"])
                 print("─" * 68)
                 print(f"🌿 {sc['name']}")

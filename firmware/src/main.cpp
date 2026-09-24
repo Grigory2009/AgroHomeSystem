@@ -593,6 +593,8 @@ void applyAiSyncData(const String& jsonStr);
 void addSproutXP(int amount);
 void saveSproutProgress();
 void loadSproutProgress();
+void resetSproutProgress();
+void drawBottomTabs(int activeTab);
 void drawSproutCharacter(int cx, int cy, int lvl, SproutMood mood);
 void iconCrown(int cx, int cy, uint16_t color);
 void animatePumpFlow();
@@ -1123,47 +1125,52 @@ void drawMinimalHeader(const char* title, bool showBack = false) {
   }
 }
 
-// 3-вкладочная навигационная панель: [MONITOR/МОНИТОР] [SPROUT/РОСТОК] [SETTINGS/НАСТРОЙКИ]
+// 4-вкладочная навигационная панель: [MONITOR/МОНИТОР] [AI VISION/ИИ ЗРЕНИЕ] [SPROUT/РОСТОК] [SETTINGS/НАСТР.]
 void drawBottomTabs(int activeTab) {
   int tabY = SCREEN_H - NAV_H;
   tft.fillRect(0, tabY, SCREEN_W, NAV_H, theme.bg);
   tft.drawFastHLine(0, tabY, SCREEN_W, theme.border);
+  tft.setTextSize(1);
 
-  // Таб 0: MONITOR / МОНИТОР
+  // Таб 0: MONITOR / МОНИТОР (x: 0..79, center = 40)
   bool isMon = (activeTab == 0);
   uint16_t colMon = isMon ? theme.primary : theme.txtDim;
   const char* txtMon = tr("MONITOR", "МОНИТОР");
   int wMon = utf8_char_count(txtMon) * 6;
-  tft.setTextSize(1);
   tft.setTextColor(colMon);
-  tft.setCursor(53 - wMon / 2, tabY + 14);
+  tft.setCursor(40 - wMon / 2, tabY + 14);
   tft.print(txtMon);
-  if (isMon) tft.fillRoundRect(53 - (wMon + 12) / 2, tabY + 28, wMon + 12, 3, 1, theme.primary);
+  if (isMon) tft.fillRoundRect(40 - (wMon + 8) / 2, tabY + 28, wMon + 8, 3, 1, theme.primary);
 
-  // Таб 1: SPROUT / РОСТОК (Тамагочи)
-  bool isSprout = (activeTab == 1);
+  // Таб 1: AI VISION / ИИ ЗРЕНИЕ (x: 80..159, center = 120)
+  bool isAi = (activeTab == 1);
+  uint16_t colAi = isAi ? theme.primary : theme.txtDim;
+  const char* txtAi = tr("AI VISION", "ИИ ЗРЕНИЕ");
+  int wAi = utf8_char_count(txtAi) * 6;
+  tft.setTextColor(colAi);
+  tft.setCursor(120 - wAi / 2, tabY + 14);
+  tft.print(txtAi);
+  if (isAi) tft.fillRoundRect(120 - (wAi + 8) / 2, tabY + 28, wAi + 8, 3, 1, theme.primary);
+
+  // Таб 2: SPROUT / РОСТОК (x: 160..239, center = 200)
+  bool isSprout = (activeTab == 2);
   uint16_t colSprout = isSprout ? theme.primary : theme.txtDim;
   const char* txtSprout = tr("SPROUT", "РОСТОК");
   int wSprout = utf8_char_count(txtSprout) * 6;
-  int centerSprout = 160;
-  int totalSproutW = 14 + wSprout;
-  int startSproutX = centerSprout - totalSproutW / 2;
-  iconLeaf(startSproutX + 4, tabY + 18, isSprout ? theme.primary : theme.txtDim);
   tft.setTextColor(colSprout);
-  tft.setCursor(startSproutX + 14, tabY + 14);
+  tft.setCursor(200 - wSprout / 2, tabY + 14);
   tft.print(txtSprout);
-  if (isSprout) tft.fillRoundRect(centerSprout - (totalSproutW + 10) / 2, tabY + 28, totalSproutW + 10, 3, 1, theme.primary);
+  if (isSprout) tft.fillRoundRect(200 - (wSprout + 8) / 2, tabY + 28, wSprout + 8, 3, 1, theme.primary);
 
-  // Таб 2: SETTINGS / НАСТРОЙКИ
-  bool isSet = (activeTab == 2);
+  // Таб 3: SETTINGS / НАСТРОЙКИ (x: 240..319, center = 280)
+  bool isSet = (activeTab == 3);
   uint16_t colSet = isSet ? theme.primary : theme.txtDim;
-  const char* txtSet = tr("SETTINGS", "НАСТРОЙКИ");
+  const char* txtSet = tr("SETTINGS", "НАСТР.");
   int wSet = utf8_char_count(txtSet) * 6;
-  int centerSet = 267;
   tft.setTextColor(colSet);
-  tft.setCursor(centerSet - wSet / 2, tabY + 14);
+  tft.setCursor(280 - wSet / 2, tabY + 14);
   tft.print(txtSet);
-  if (isSet) tft.fillRoundRect(centerSet - (wSet + 12) / 2, tabY + 28, wSet + 12, 3, 1, theme.primary);
+  if (isSet) tft.fillRoundRect(280 - (wSet + 8) / 2, tabY + 28, wSet + 8, 3, 1, theme.primary);
 }
 
 // ==========================================
@@ -1436,6 +1443,16 @@ void addSproutXP(int amount) {
   saveSproutProgress();
 }
 
+void resetSproutProgress() {
+  sproutLevel = 1;
+  sproutXP = 0;
+  saveSproutProgress();
+  aiGrowthStage = 1;
+  aiGrowthProgress = 5.0f;
+  sproutLoveUntil = millis() + 4000;
+  Serial.println("{\"type\":\"cmd\",\"action\":\"reset_sprout\"}");
+}
+
 // 4 стадии эволюции персонажа-ростка
 void drawSproutCharacter(int cx, int cy, int lvl, SproutMood mood) {
   // 1. Горшок гидропоники
@@ -1618,14 +1635,15 @@ void drawSproutScreen() {
   tft.setCursor(174, 159);
   tft.print(tr("WATER & FEED (+10XP)", "ПОЛИТЬ (+10XP)"));
 
-  // Кнопка 3: [ 👁️ AI PLANT VISION > ]
-  drawGlowCard(152, 178, 160, 24, theme.primary, theme.surfaceHi, theme.borderHi);
-  iconDot(164, 190, 3, theme.primary);
-  tft.setTextColor(theme.primary);
+  // Кнопка 3: [ 🔄 СБРОС УРОВНЯ / RESET SPROUT LVL ]
+  drawCard(152, 178, 160, 24, theme.surfaceHi, theme.borderHi);
+  iconDot(164, 190, 3, theme.warn);
+  tft.setTextSize(1);
+  tft.setTextColor(theme.warn);
   tft.setCursor(174, 186);
-  tft.print(tr("AI PLANT VISION >", "AI ЗРЕНИЕ >"));
+  tft.print(tr("RESET SPROUT LVL", "СБРОС УРОВНЯ"));
 
-  drawBottomTabs(1);
+  drawBottomTabs(2);
 }
 
 // ==========================================
@@ -1949,118 +1967,105 @@ void drawAdvisorScreen() {
 // ==========================================
 void drawVisionScreen() {
   tft.fillScreen(theme.bg);
-  drawMinimalHeader(tr("AI PLANT VISION", "AI ЗРЕНИЕ"), true);
+  drawMinimalHeader(tr("AI PLANT VISION", "AI ЗРЕНИЕ"), false);
 
   bool aiActive = isAiConnected();
   int health = aiActive ? (int)aiPlantHealth : calculatePlantHealthScore();
   uint16_t hColor = (health >= 85) ? theme.ok : (health >= 65 ? theme.warn : theme.alert);
 
-  // Статусная полоса источника данных (y: 40..48)
+  // Статусная полоса источника данных (y: 38..48)
   tft.setTextSize(1);
   if (aiActive) {
-    iconDot(14, 45, 3, theme.ok);
+    iconDot(14, 43, 3, theme.ok);
     tft.setTextColor(theme.ok);
-    tft.setCursor(24, 42);
+    tft.setCursor(24, 40);
     tft.print(tr("RPi 4B EDGE AI ONLINE", "RPi 4B AI НА СВЯЗИ"));
 
     tft.setTextColor(theme.txtDim);
-    tft.setCursor(174, 42);
+    tft.setCursor(174, 40);
     tft.print("CPU " + String((int)aiRpiTemp) + "C | " + String((int)aiInferenceMs) + "ms");
   } else {
-    iconDot(14, 45, 3, theme.warn);
+    iconDot(14, 43, 3, theme.warn);
     tft.setTextColor(theme.warn);
-    tft.setCursor(24, 42);
+    tft.setCursor(24, 40);
     tft.print(tr("STANDBY: AUTONOMOUS SENSORS", "АВТОНОМНЫЕ ДАТЧИКИ"));
 
     tft.setTextColor(theme.txtDim);
-    tft.setCursor(200, 42);
+    tft.setCursor(200, 40);
     tft.print(tr("USB/WiFi IDLE", "СВЯЗЬ ЖДЕТ"));
   }
 
-  // Ряд 1: Здоровье AI (слева) и Культура / Диагноз (справа) (y: 54..108)
-  drawGlowCard(8, 54, 120, 54, hColor, theme.surface, theme.border);
+  // Ряд 1: Здоровье AI (слева) и Культура / Диагноз (справа) (y: 50..102)
+  drawGlowCard(8, 50, 118, 52, hColor, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(16, 60);
+  tft.setCursor(16, 56);
   tft.print(tr("AI HEALTH", "AI ЗДОРОВЬЕ"));
 
   tft.setTextSize(3);
   tft.setTextColor(hColor);
-  tft.setCursor(16, 73);
+  tft.setCursor(16, 69);
   tft.print(String(health) + "%");
 
-  drawGlowCard(134, 54, 178, 54, theme.secondary, theme.surface, theme.border);
+  drawGlowCard(132, 50, 180, 52, theme.secondary, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(142, 60);
+  tft.setCursor(140, 56);
   tft.print(tr("CROP: ", "КУЛЬТУРА: "));
   tft.setTextColor(theme.txtMain);
   tft.print(aiActive ? aiCropName : tr("Agro Culture", "Агро-культура"));
 
-  tft.setCursor(142, 73);
+  tft.setCursor(140, 69);
   tft.setTextColor(hColor);
-  String diagStr = aiActive ? (aiDiagnosis + " (" + String((int)aiConfidence) + "%)") : tr("Sensor Heuristic Normal", "Датчики: Норма");
-  if (utf8_char_count(diagStr.c_str()) > 24) diagStr = diagStr.substring(0, 24);
+  String diagStr = aiActive ? (aiDiagnosis + " (" + String((int)aiConfidence) + "%)") : tr("Sensor Normal", "Норма датчиков");
+  if (utf8_char_count(diagStr.c_str()) > 22) diagStr = diagStr.substring(0, 22);
   tft.print(diagStr);
 
-  tft.setCursor(142, 90);
+  tft.setCursor(140, 84);
   tft.setTextColor(theme.txtDim);
-  tft.print(tr("Sev: ", "Уровень: ") + (aiActive ? aiSeverity : tr("None", "Нет")) + " | " + (aiSeverity == "None" ? tr("Clean Foliage", "Чистый лист") : tr("Alert Active", "Внимание")));
+  tft.print(tr("Sev: ", "Уровень: ") + (aiActive ? aiSeverity : tr("None", "Нет")) + " | " + (aiSeverity == "None" ? tr("Clean", "Чисто") : tr("Alert", "Внимание")));
 
-  // Ряд 2: Прогресс роста растения и биомасса (y: 112..160)
-  drawGlowCard(8, 112, 304, 48, theme.primary, theme.surface, theme.border);
+  // Ряд 2: Прогресс роста растения и биомасса (y: 106..148)
+  drawGlowCard(8, 106, 304, 42, theme.primary, theme.surface, theme.border);
   tft.setTextSize(1);
   tft.setTextColor(theme.primary);
-  tft.setCursor(16, 117);
+  tft.setCursor(16, 111);
   tft.print(tr("GROWTH: ", "РОСТ: ") + String((int)aiGrowthProgress) + "%");
 
   tft.setTextColor(theme.txtMuted);
-  tft.setCursor(136, 117);
+  tft.setCursor(136, 111);
   String stageStr = (aiGrowthStage == 1 ? tr("SPROUT", "ПРОРОСТОК") : (aiGrowthStage == 2 ? tr("VEG", "ВЕГЕТАЦИЯ") : (aiGrowthStage == 3 ? tr("BLOOM", "ЦВЕТЕНИЕ") : tr("MATURE", "УРОЖАЙ"))));
   tft.print(tr("STAGE ", "СТАДИЯ ") + String(aiGrowthStage) + "/4: " + stageStr);
 
   // Многосегментный прогресс-бар развития растения
   int barW = 288;
-  int barH = 8;
-  tft.fillRoundRect(16, 129, barW, barH, 3, theme.surfaceHi);
+  int barH = 7;
+  tft.fillRoundRect(16, 122, barW, barH, 3, theme.surfaceHi);
   int fillW = constrain((int)((aiGrowthProgress * (float)barW) / 100.0f), 4, barW);
-  tft.fillRoundRect(16, 129, fillW, barH, 3, theme.primary);
+  tft.fillRoundRect(16, 122, fillW, barH, 3, theme.primary);
 
   // Разделители стадий (Проросток / Вегетация / Цветение / Урожай)
   for (int st = 1; st <= 3; st++) {
     int dx = 16 + (st * barW) / 4;
-    tft.drawFastVLine(dx, 129, barH, theme.borderHi);
+    tft.drawFastVLine(dx, 122, barH, theme.borderHi);
   }
 
-  tft.setCursor(16, 143);
+  tft.setCursor(16, 134);
   tft.setTextColor(theme.txtDim);
   tft.print(tr("Biomass: ", "Биомасса: ") + String(aiBiomass, 1) + "% | " + tr("Chl: ", "Хлор: ") + String(aiChlorosis, 1) + "% | " + tr("Nec: ", "Некр: ") + String(aiNecrosis, 1) + "%");
 
-  // Ряд 3: Агрономические рекомендации от Edge AI (y: 164..202)
-  drawCard(8, 164, 304, 38, theme.surface, theme.border);
-  iconDot(18, 174, 3, theme.accent);
+  // Ряд 3: Агрономические рекомендации от Edge AI (y: 152..198)
+  drawCard(8, 152, 304, 46, theme.surface, theme.border);
+  iconDot(18, 161, 3, theme.accent);
   tft.setTextSize(1);
   tft.setTextColor(theme.accent);
-  tft.setCursor(26, 169);
+  tft.setCursor(26, 156);
   tft.print(tr("AI RECOMMENDATION:", "AI РЕКОМЕНДАЦИЯ:"));
 
-  drawWrappedText(aiAdvice.c_str(), 26, 180, 280, 9, 2, theme.txtMain);
+  drawWrappedText(aiAdvice.c_str(), 26, 168, 280, 9, 3, theme.txtMain);
 
-  // Ряд 4: Кнопки навигации и управления (y: 206..234)
-  // Кнопка 1: [ < НАЗАД ] (x: 8..152)
-  drawCard(8, 206, 144, 28, theme.surfaceHi, theme.borderHi);
-  iconBackArrow(20, 214, 12, theme.primary);
-  tft.setTextSize(1);
-  tft.setTextColor(theme.txtMain);
-  tft.setCursor(38, 215);
-  tft.print(tr("BACK TO HOME", "НА ГЛАВНУЮ"));
-
-  // Кнопка 2: [ 📷 СДЕЛАТЬ СНИМОК ] (x: 160..312)
-  drawGlowCard(160, 206, 152, 28, theme.primary, theme.surfaceHi, theme.borderHi);
-  iconDot(172, 220, 3, theme.primary);
-  tft.setTextColor(theme.primary);
-  tft.setCursor(182, 215);
-  tft.print(tr("SNAP & DIAGNOSE", "СДЕЛАТЬ СНИМОК"));
+  // Навигационная панель табов (Таб 1: AI VISION / ИИ ЗРЕНИЕ)
+  drawBottomTabs(1);
 }
 
 // ==========================================
@@ -2184,6 +2189,7 @@ void processSerialCommunication() {
             else if (action == "pump_off") { pumpState = false; lastPumpState = false; }
             else if (action == "toggle_pump") { pumpState = !pumpState; lastPumpState = pumpState; }
             else if (action == "pet") { sproutLoveUntil = millis() + 6000; currentWisdomIndex = (currentWisdomIndex + 1) % WISDOM_COUNT; }
+            else if (action == "reset_sprout") { resetSproutProgress(); }
             digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
             if (currentScreen == SCR_HOME && !isSleeping) refreshHomeValues();
             if (currentScreen == SCR_SPROUT && !isSleeping) drawSproutScreen();
@@ -2399,7 +2405,9 @@ void setupWebDashboard() {
       if (action == "pump_on") { pumpState = true; lastPumpState = true; }
       else if (action == "pump_off") { pumpState = false; lastPumpState = false; }
       else if (action == "toggle_pump") { pumpState = !pumpState; lastPumpState = pumpState; }
+      else if (action == "reset_sprout") { resetSproutProgress(); }
       if (currentScreen == SCR_HOME) refreshHomeValues();
+      else if (currentScreen == SCR_SPROUT) drawSproutScreen();
       webServer.send(200, "application/json", "{\"status\":\"ok\",\"pump\":" + String(pumpState ? "true" : "false") + "}");
     } else {
       webServer.send(400, "application/json", "{\"status\":\"error\"}");
@@ -2867,7 +2875,7 @@ void drawSettingsScreen() {
   tft.print(tr("TOUCH", "ТАЧ"));
   drawPill(258, 174, 50, 20, tr("ALIGN", "ТЕСТ"), theme.txtMain, theme.surfaceHi);
 
-  drawBottomTabs(2);
+  drawBottomTabs(3);
 }
 
 // ==========================================
@@ -3047,6 +3055,10 @@ void handleTouches() {
   // Навигация свайпами (Влево / Вправо)
   if (gesture == GESTURE_SWIPE_LEFT) {
     if (currentScreen == SCR_HOME) {
+      currentScreen = SCR_VISION;
+      drawVisionScreen();
+      return;
+    } else if (currentScreen == SCR_VISION) {
       currentScreen = SCR_SPROUT;
       drawSproutScreen();
       return;
@@ -3064,7 +3076,11 @@ void handleTouches() {
       currentScreen = SCR_SPROUT;
       drawSproutScreen();
       return;
-    } else if (currentScreen == SCR_SPROUT || currentScreen == SCR_DETAIL || currentScreen == SCR_ADVISOR || currentScreen == SCR_VISION) {
+    } else if (currentScreen == SCR_SPROUT) {
+      currentScreen = SCR_VISION;
+      drawVisionScreen();
+      return;
+    } else if (currentScreen == SCR_VISION || currentScreen == SCR_DETAIL || currentScreen == SCR_ADVISOR) {
       currentScreen = SCR_HOME;
       drawHomeScreen();
       return;
@@ -3133,12 +3149,15 @@ void handleTouches() {
         lastPumpState = pumpState;
         refreshHomeValues();
       }
-      // 5. Нижний навбар (MONITOR, SPROUT, SETTINGS)
+      // 5. Нижний навбар (MONITOR, VISION, SPROUT, SETTINGS)
       else if (y > SCREEN_H - NAV_H) {
-        if (x >= 106 && x < 214) {
+        if (x >= 80 && x < 160) {
+          currentScreen = SCR_VISION;
+          drawVisionScreen();
+        } else if (x >= 160 && x < 240) {
           currentScreen = SCR_SPROUT;
           drawSproutScreen();
-        } else if (x >= 214) {
+        } else if (x >= 240) {
           currentScreen = SCR_SETTINGS;
           drawSettingsScreen();
         }
@@ -3166,10 +3185,10 @@ void handleTouches() {
         drawSproutScreen();
         return;
       }
-      // Кнопка 3: [ AI PLANT VISION > ] (y: 176..204)
+      // Кнопка 3: [ 🔄 СБРОС УРОВНЯ / RESET SPROUT LVL ] (y: 176..204)
       else if (x >= 150 && x <= 312 && y >= 176 && y <= 204) {
-        currentScreen = SCR_VISION;
-        drawVisionScreen();
+        resetSproutProgress();
+        drawSproutScreen();
         return;
       }
       // Тап по персонажу -> поглаживание
@@ -3186,12 +3205,15 @@ void handleTouches() {
         drawSproutScreen();
         return;
       }
-      // Навбар
+      // Навбар (4 таба)
       else if (y > SCREEN_H - NAV_H) {
-        if (x < 106) {
+        if (x < 80) {
           currentScreen = SCR_HOME;
           drawHomeScreen();
-        } else if (x >= 214) {
+        } else if (x >= 80 && x < 160) {
+          currentScreen = SCR_VISION;
+          drawVisionScreen();
+        } else if (x >= 240) {
           currentScreen = SCR_SETTINGS;
           drawSettingsScreen();
         }
@@ -3257,16 +3279,32 @@ void handleTouches() {
   }
   else if (currentScreen == SCR_VISION) {
     if (gesture == GESTURE_TAP) {
-      // Кнопка назад в шапке или [ BACK TO HOME ] (x: 8..152, y: 206..234)
-      if ((x < 50 && y < HEADER_H) || (x >= 8 && x <= 152 && y >= 206 && y <= 234)) {
+      // 1. Нижний навбар (4 таба)
+      if (y > SCREEN_H - NAV_H) {
+        if (x < 80) {
+          currentScreen = SCR_HOME;
+          drawHomeScreen();
+          return;
+        } else if (x >= 160 && x < 240) {
+          currentScreen = SCR_SPROUT;
+          drawSproutScreen();
+          return;
+        } else if (x >= 240) {
+          currentScreen = SCR_SETTINGS;
+          drawSettingsScreen();
+          return;
+        }
+      }
+      // 2. Кнопка назад в шапке
+      else if (x < 50 && y < HEADER_H) {
         currentScreen = SCR_HOME;
         drawHomeScreen();
         return;
       }
-      // Кнопка [ SNAP & DIAGNOSE ] (x: 160..312, y: 206..234)
-      else if (x >= 160 && x <= 312 && y >= 206 && y <= 234) {
+      // 3. Тап по карточке рекомендаций (y: 152..198) -> запрос нового снимка у RPi
+      else if (x >= 8 && x <= 312 && y >= 152 && y <= 198) {
         Serial.println("{\"type\":\"cmd\",\"action\":\"diagnose\"}");
-        drawPill(160, 206, 152, 28, "REQUESTED...", theme.ok, theme.surfaceHi, theme.primary);
+        drawPill(180, 156, 120, 20, tr("REQUESTED...", "ЗАПРОШЕНО..."), theme.ok, theme.surfaceHi, theme.primary);
         return;
       }
     }
@@ -3296,12 +3334,15 @@ void handleTouches() {
   }
   else if (currentScreen == SCR_SETTINGS) {
     if (gesture == GESTURE_TAP) {
-      // Нижний навбар
+      // Нижний навбар (4 таба)
       if (y > SCREEN_H - NAV_H) {
-        if (x < 106) {
+        if (x < 80) {
           currentScreen = SCR_HOME;
           drawHomeScreen();
-        } else if (x >= 106 && x < 214) {
+        } else if (x >= 80 && x < 160) {
+          currentScreen = SCR_VISION;
+          drawVisionScreen();
+        } else if (x >= 160 && x < 240) {
           currentScreen = SCR_SPROUT;
           drawSproutScreen();
         }
