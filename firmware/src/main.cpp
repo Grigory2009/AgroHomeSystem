@@ -924,14 +924,21 @@ bool loadCalibration() {
   prefs.begin("touchcal", true);
   bool valid = prefs.getBool("valid", false);
   if (valid) {
-    calX_min = prefs.getInt("xmin", 0);
-    calX_max = prefs.getInt("xmax", 4095);
-    calY_min = prefs.getInt("ymin", 0);
-    calY_max = prefs.getInt("ymax", 4095);
+    calX_min = prefs.getInt("xmin", 250);
+    calX_max = prefs.getInt("xmax", 3850);
+    calY_min = prefs.getInt("ymin", 250);
+    calY_max = prefs.getInt("ymax", 3850);
     swapAxes = prefs.getBool("swap", false);
+  } else {
+    // Надежные параметры калибровки по умолчанию для резистивного тача XPT2046 320x240
+    calX_min = 250;
+    calX_max = 3850;
+    calY_min = 250;
+    calY_max = 3850;
+    swapAxes = false;
   }
   prefs.end();
-  return valid;
+  return true; // Никогда не блокировать запуск экрана и Serial интерфейса
 }
 
 void saveCalibration() {
@@ -2199,7 +2206,7 @@ void processSerialCommunication() {
         serialRxBuffer = "";
       }
     } else {
-      if (serialRxBuffer.length() < 1024) {
+      if (serialRxBuffer.length() < 2048) {
         serialRxBuffer += c;
       } else {
         serialRxBuffer = "";
@@ -3494,6 +3501,7 @@ void handleTouches() {
 // ==========================================
 void setup() {
   Serial.begin(115200);
+  Serial.setRxBufferSize(2048);
 
   // Инициализация реле помпы
   pinMode(PUMP_PIN, OUTPUT);

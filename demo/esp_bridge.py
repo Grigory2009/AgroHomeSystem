@@ -111,21 +111,31 @@ class EspBridge:
     @staticmethod
     def find_esp_ports() -> List[str]:
         """Автоматический поиск доступных портов с ESP32-S3."""
-        if not HAS_SERIAL:
-            return []
         found = []
-        for p in serial.tools.list_ports.comports():
-            desc = (p.description or "").lower()
-            hwid = (p.hwid or "").lower()
-            mfg = (p.manufacturer or "").lower()
-            
-            # ESP32-S3 Native USB-CDC (VID:PID 303a:1001), CH340, CP210x, FTDI
-            if any(k in desc or k in hwid or k in mfg for k in [
-                "303a:", "esp32", "usb jtag", "cp210", "ch340", "ch341", "ftdi", "uart", "serial"
-            ]):
-                found.append(p.device)
-            elif "com" in p.device.lower() or "ttyacm" in p.device.lower() or "ttyusb" in p.device.lower():
-                found.append(p.device)
+        if HAS_SERIAL:
+            try:
+                for p in serial.tools.list_ports.comports():
+                    desc = (p.description or "").lower()
+                    hwid = (p.hwid or "").lower()
+                    mfg = (p.manufacturer or "").lower()
+                    dev = p.device
+                    
+                    # ESP32-S3 Native USB-CDC (VID:PID 303a:1001), CH340, CP210x, FTDI
+                    if any(k in desc or k in hwid or k in mfg for k in [
+                        "303a:", "esp32", "usb jtag", "cp210", "ch340", "ch341", "ftdi", "uart", "serial"
+                    ]):
+                        found.append(dev)
+                    elif "com" in dev.lower() or "ttyacm" in dev.lower() or "ttyusb" in dev.lower():
+                        found.append(dev)
+            except Exception:
+                pass
+
+        # Fallback прямая проверка файловой системы Linux (/dev/ttyACM*, /dev/ttyUSB*)
+        if sys.platform.startswith("linux"):
+            for candidate in ("/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/serial0"):
+                if os.path.exists(candidate) and candidate not in found:
+                    found.append(candidate)
+
         return found
 
     def _connect(self) -> bool:
@@ -144,10 +154,12 @@ class EspBridge:
             candidates = self.find_esp_ports()
             if candidates:
                 target_port = candidates[0]
-                print(f"[EspBridge] Автоматически обнаружен порт ESP32: {target_port}")
+                print(f"[EspBridge] Обнаружен порт ESP32: {target_port}")
             else:
-                print("[EspBridge] Порты ESP32 не найдены. Ожидание подключения...")
-                return False
+                if sys.platform.startswith("linux") and os.path.exists("/dev/ttyACM0"):
+                    target_port = "/dev/ttyACM0"
+                else:
+                    return False
 
         try:
             self.ser = serial.Serial(
@@ -266,6 +278,9 @@ class EspBridge:
         }
 
         # 1. Отправка через Serial (USB)
+        if (not self.ser or not self.ser.is_open) and self.connection_mode != "HTTP":
+            self._connect()
+
         if self.ser and self.ser.is_open:
             try:
                 line_data = (json.dumps(payload, ensure_ascii=False, separators=(',', ':')) + "\n").encode("utf-8")
@@ -275,6 +290,7 @@ class EspBridge:
                 return True
             except Exception as e:
                 print(f"[EspBridge] Ошибка отправки по Serial: {e}")
+                self.ser = None
 
         # 2. Отправка через HTTP REST API
         if self.esp_ip and HAS_REQUESTS:
