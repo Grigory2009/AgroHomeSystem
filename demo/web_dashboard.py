@@ -138,6 +138,9 @@ class SystemHub:
         self.ai_thread = threading.Thread(target=self._ai_analysis_loop, daemon=True)
         self.ai_thread.start()
 
+        self.sync_thread = threading.Thread(target=self._heartbeat_sync_loop, daemon=True)
+        self.sync_thread.start()
+
     def log(self, text: str, level: str = "info"):
         """Добавить запись в системный лог."""
         entry = {
@@ -317,6 +320,21 @@ class SystemHub:
                         treatment_text = res.treatment or res.prevention or "Оптимальный режим ухода."
                         treatment_en = res.prevention or res.treatment or "Optimal care mode."
 
+                        # Автоматический расчет прогресса роста растения по распознанной стадии и биомассе
+                        leaf_area = getattr(res.metrics, 'leaf_area_ratio', 0.35)
+                        raw_lbl = res.raw_label or ""
+                        if "Germination" in raw_lbl or leaf_area < 0.08:
+                            calc_growth = min(22.0, max(6.0, leaf_area * 250.0))
+                        elif "Cotyledon" in raw_lbl or leaf_area < 0.35:
+                            calc_growth = 25.0 + min(35.0, leaf_area * 120.0)
+                        elif "Mature" in raw_lbl or leaf_area >= 0.35:
+                            calc_growth = 65.0 + min(33.0, (leaf_area - 0.20) * 50.0)
+                        else:
+                            calc_growth = min(98.0, max(8.0, leaf_area * 110.0))
+
+                        # Плавное обновление прогресса роста
+                        self.growth_percent = round(float(calc_growth), 1)
+
                         self.last_diagnosis.update({
                             "crop": crop_name,
                             "crop_en": crop_name_en,
@@ -343,14 +361,23 @@ class SystemHub:
 
             time.sleep(self.sample_interval)
 
+    def _heartbeat_sync_loop(self):
+        """Непрерывная трансляция AI-синхронизации на ESP32 каждые 2.0 секунды."""
+        while self.running:
+            try:
+                self.sync_with_esp32()
+            except Exception as e:
+                pass
+            time.sleep(2.0)
+
     def sync_with_esp32(self) -> bool:
         """Передать текущую диагностику и рост на ESP32-S3."""
         if not self.bridge:
             return False
 
         with self.lock:
-            d = self.last_diagnosis
-            growth = self.growth_percent
+            d = dict(self.last_diagnosis)
+            growth = float(self.growth_percent)
             preset = CROP_PRESETS.get(self.active_preset)
             crop_name_display = preset.name_ru if preset else d["crop"]
 
@@ -371,8 +398,6 @@ class SystemHub:
             stage=stage_info["stage"],
             stage_name=stage_info["name_ru"]
         )
-        if success:
-            self.log(f"-> Синхронизировано с ESP32: Культура={crop_name_display} | Рост={growth}% | Здоровье={d['health_score']}%", "success")
         return success
 
     def toggle_pump(self) -> bool:
@@ -1835,10 +1860,17 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('bar-necrosis').style.width = `${Math.min(100, nc)}%`;
 
       // 6. Growth Lifecycle
-      const growth = data.plant.growth_percent || 45;
-      document.getElementById('growth-fill').style.width = `${growth}%`;
-      const stageName = isRu ? data.plant.stage_name_ru : data.plant.stage_name_en;
-      document.getElementById('growth-val-text').innerText = `${growth.toFixed(1)}% [${stageName}]`;
+      const growth = typeof data.plant.growth_percent !== 'undefined' ? Number(data.plant.growth_percent) : 35;
+      const fillPercent = Math.max(5, Math.min(100, growth));
+      const growthFillEl = document.getElementById('growth-fill');
+      if (growthFillEl) {
+        growthFillEl.style.width = `${fillPercent}%`;
+      }
+      const stageName = isRu ? data.plant.stage_name_ru : (data.plant.stage_name_en || 'Sprout');
+      const growthTxtEl = document.getElementById('growth-val-text');
+      if (growthTxtEl) {
+        growthTxtEl.innerText = `${growth.toFixed(1)}% [${stageName}]`;
+      }
 
       for (let i = 1; i <= 4; i++) {
         const el = document.getElementById(`st-${i}`);
