@@ -1,0 +1,79 @@
+{
+  "Watercress_Chlorosis": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Минеральный дисбаланс",
+    "disease_ru": "Хлороз листьев (Дефицит железа / азота)",
+    "pathogen": "Nutrient Deficiency (pH > 6.8 или TDS < 350 ppm)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Отрегулировать pH до 6.2, внести хелат железа Fe-DTPA в гидропонный раствор.",
+    "prevention": "Контроль электропроводности EC и pH раствора."
+  },
+  "Watercress_Damping_Off": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Болезнь всходов",
+    "disease_ru": "Черная ножка (Загнивание и полегание)",
+    "pathogen": "Pythium ultimum / Rhizoctonia solani",
+    "is_healthy": false,
+    "severity": "Critical",
+    "treatment": "Включить обдув лотка! Снизить влажность до 50%, дать подсохнуть, обработать Фитоспорином.",
+    "prevention": "Постоянная аэрация, не загущать посев семян."
+  },
+  "Watercress_Germination": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Фаза проклевывания (Дни 1-3)",
+    "disease_ru": "Всходы семян (Здоровое прорастание)",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Семена активно прорастают. Поддерживайте влажность 65-75% и рассеянный свет.",
+    "prevention": "Не переливать лоток на раннем этапе."
+  },
+  "Watercress_Healthy_Cotyledons": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Фаза семядолей (Дни 4-6)",
+    "disease_ru": "Здоровый кресс-салат (Семядоли)",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Отличное состояние! Листья сочные, темно-изумрудные. Световой день 14-16 часов.",
+    "prevention": "Поддерживать температуру воды 18-22°C."
+  },
+  "Watercress_Healthy_Mature": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Спелая микрозелень (Дни 7-12)",
+    "disease_ru": "Спелый кресс-салат (Готов к срезке)",
+    "pathogen": "None",
+    "is_healthy": true,
+    "severity": "None",
+    "treatment": "Пик питательной ценности! Листовой ковер плотный, микрозелень готова к сбору.",
+    "prevention": "Своевременная срезка до огрубения стеблей."
+  },
+  "Watercress_Mold": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Грибковая инфекция",
+    "disease_ru": "Серая гниль и белая плесень (Botrytis)",
+    "pathogen": "Botrytis cinerea / Mucor",
+    "is_healthy": false,
+    "severity": "High",
+    "treatment": "Удалить очаги мицелия пинцетом, снизить влажность, обработать биофунгицидом Триходерма.",
+    "prevention": "Стерильный субстрат, циркуляция воздуха."
+  },
+  "Watercress_Tip_Burn": {
+    "crop": "Кресс-салат",
+    "crop_en": "Watercress",
+    "stage": "Осмотический стресс",
+    "disease_ru": "Краевой ожог листьев (Засоление / Высокий TDS)",
+    "pathogen": "Salinity Stress (TDS > 850 ppm)",
+    "is_healthy": false,
+    "severity": "Moderate",
+    "treatment": "Промыть субстрат чистой осмотической водой, снизить TDS до 500 ppm.",
+    "prevention": "Не допускать накопления солей в питательном баке."
+  }
+}

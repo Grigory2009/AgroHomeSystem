@@ -27,8 +27,15 @@ compile_commands.json
 ~$*.m3~
 ~$*
 
+# Temporary / Scratch
+scratch/
+benchmark_results.json
+demo/rpi_throttling_report.json
+demo/dataset_watercress/
+
 # OS / IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+
