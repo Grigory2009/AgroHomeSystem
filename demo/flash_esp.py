@@ -42,7 +42,21 @@ def main():
         import esptool
     except ImportError:
         print("[ИНФО] Установка утилиты esptool...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "esptool"])
+        installed = False
+        for install_cmd in [
+            [sys.executable, "-m", "pip", "install", "--break-system-packages", "esptool"],
+            [sys.executable, "-m", "pip", "install", "esptool"],
+            ["sudo", "apt-get", "install", "-y", "python3-esptool"]
+        ]:
+            try:
+                subprocess.check_call(install_cmd)
+                installed = True
+                break
+            except Exception:
+                continue
+        if not installed:
+            print("[ОШИБКА] Не удалось установить esptool. Установите вручную: pip3 install esptool --break-system-packages")
+            sys.exit(1)
 
     cmd = [
         sys.executable, "-m", "esptool",
