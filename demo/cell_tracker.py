@@ -1,31 +1,20 @@
 """
-AgroHomeSystem - Per-Cell Plant Tracking Engine (24-Cell Matrix)
+AgroHomeSystem - Per-Cell Plant Tracking & Matrix Calibration Engine
 =============================================================================
 Модуль индивидуального поячеечного трекинга для 3D-корпуса AgroHomeSystem v2
-(лоток на 24 ячейки: сетка 4x6 под минераловатные пробки 22 мм).
-
-Возможности:
-1. Автоматическая разбивка рабочей зоны лотка на 24 независимых микро-ROI (4x6).
-2. Расчет биофизических параметров для каждой ячейки:
-   - Процент покрытия пологом (Biomass Coverage %)
-   - Индекс хлорофилла (ExG)
-   - Доля хлороза (Chlorosis %) и некроза (Necrosis %)
-   - Детекция мицелия серой гнили (Mold / Botrytis %)
-3. Определение фазы и статуса для каждой ячейки:
-   - EMPTY (пустая/нет всходов)
-   - GERMINATING (фаза прорастания семян)
-   - SPROUT (семядоли / молодой росток)
-   - HEALTHY (активный здоровый рост)
-   - CHLOROSIS (дефицит питания/pH стресс)
-   - MOLD (плесень/серая гниль)
-   - DAMPING_OFF (черная ножка)
-4. Рендеринг киберпанк HUD-оверлея (неоновые кольца, бейджи, статусы).
-5. Экспорт состояния для Web Dashboard (JSON API / WebSocket).
+(лоток на 24 ячейки: сетка 4x6 под минераловатные пробки 22 мм) с поддержкой:
+1. Автоматического обнаружения лотка и посадочных отверстий (Computer Vision).
+2. Ручной калибровки геометрии матрицы (ROI, радиусы, ряды/колонки).
+3. Индивидуального ручного редактирования ячеек (культура, статус, дата, заметки).
+4. Сохранения и загрузки конфигурации в JSON (cell_grid_config.json).
 =============================================================================
 """
 
+import os
+import json
 import time
 import math
+from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Tuple, Optional, Any
 import cv2
@@ -63,6 +52,12 @@ class CellMetrics:
     diagnosis_ru: str = "Свободно"
     diagnosis_en: str = "Empty"
     
+    # Пользовательские поля и ручные переопределения
+    crop_name: str = "Микрозелень"
+    planted_date: str = ""
+    notes: str = ""
+    is_manual_override: bool = False
+    
     last_updated: float = field(default_factory=time.time)
 
 
@@ -78,31 +73,271 @@ class GridCellTracker:
         rows: int = 6,
         cols: int = 4,
         roi_norm: Tuple[float, float, float, float] = (0.06, 0.08, 0.94, 0.92),
-        cell_radius_ratio: float = 0.38
+        cell_radius_ratio: float = 0.38,
+        config_path: Optional[str] = None
     ):
         """
         :param rows: Количество рядов (по умолчанию 6)
         :param cols: Количество колонок (по умолчанию 4)
         :param roi_norm: Относительные границы лотка в кадре (ymin, xmin, ymax, xmax) в диапазоне 0.0..1.0
         :param cell_radius_ratio: Радиус окружности ячейки относительно шага сетки
+        :param config_path: Путь к файлу конфигурации JSON
         """
-        self.rows = rows
-        self.cols = cols
+        self.rows = max(1, min(rows, 12))
+        self.cols = max(1, min(cols, 12))
         self.roi_norm = roi_norm
-        self.cell_radius_ratio = cell_radius_ratio
+        self.cell_radius_ratio = max(0.1, min(cell_radius_ratio, 0.5))
         
-        # История динамики прироста биомассы по ячейкам (для расчета скорости роста)
-        self.history: Dict[str, List[Tuple[float, float]]] = {}  # cell_id -> [(timestamp, coverage)]
+        # Словарь пользовательских настроек для конкретных ячеек (cell_id -> {crop_name, planted_date, status_override, notes})
+        self.cell_overrides: Dict[str, Dict[str, Any]] = {}
+        
+        # Определение пути конфигурационного файла
+        if config_path:
+            self.config_path = Path(config_path)
+        else:
+            self.config_path = Path(__file__).resolve().parent / "cell_grid_config.json"
+
+        # История динамики прироста биомассы по ячейкам
+        self.history: Dict[str, List[Tuple[float, float]]] = {}
         self.last_metrics: List[CellMetrics] = []
+        
+        # Автоматическая загрузка сохраненной конфигурации при старте
+        self.load_config()
 
     def set_roi(self, ymin: float, xmin: float, ymax: float, xmax: float):
         """Калибровка границ лотка в поле зрения камеры."""
         self.roi_norm = (
-            max(0.0, min(ymin, 0.8)),
-            max(0.0, min(xmin, 0.8)),
-            min(1.0, max(ymax, 0.2)),
-            min(1.0, max(xmax, 0.2))
+            max(0.0, min(float(ymin), 0.85)),
+            max(0.0, min(float(xmin), 0.85)),
+            min(1.0, max(float(ymax), 0.15)),
+            min(1.0, max(float(xmax), 0.15))
         )
+
+    def set_geometry(self, rows: int, cols: int, roi_norm: Tuple[float, float, float, float], radius_ratio: float):
+        """Полная установка геометрических параметров матрицы."""
+        self.rows = max(1, min(int(rows), 12))
+        self.cols = max(1, min(int(cols), 12))
+        self.set_roi(*roi_norm)
+        self.cell_radius_ratio = max(0.1, min(float(radius_ratio), 0.5))
+
+    def set_cell_override(
+        self,
+        cell_id: str,
+        crop_name: Optional[str] = None,
+        planted_date: Optional[str] = None,
+        status_override: Optional[str] = None,
+        notes: Optional[str] = None
+    ):
+        """Установить ручные параметры для конкретной ячейки."""
+        cid = str(cell_id).upper().strip()
+        if cid not in self.cell_overrides:
+            self.cell_overrides[cid] = {}
+        
+        entry = self.cell_overrides[cid]
+        if crop_name is not None:
+            entry["crop_name"] = str(crop_name).strip()
+        if planted_date is not None:
+            entry["planted_date"] = str(planted_date).strip()
+        if status_override is not None:
+            entry["status_override"] = str(status_override).strip().upper()
+        if notes is not None:
+            entry["notes"] = str(notes).strip()
+            
+        self.save_config()
+
+    def clear_cell_override(self, cell_id: str):
+        """Сбросить ручные параметры ячейки к автоматическим."""
+        cid = str(cell_id).upper().strip()
+        if cid in self.cell_overrides:
+            del self.cell_overrides[cid]
+            self.save_config()
+
+    def save_config(self, filepath: Optional[str] = None) -> bool:
+        """Сохранение калибровки и настроек матрицы в JSON-файл."""
+        path = Path(filepath) if filepath else self.config_path
+        data = {
+            "version": "2.0",
+            "tray_layout": f"{self.cols}x{self.rows}",
+            "rows": self.rows,
+            "cols": self.cols,
+            "roi_norm": list(self.roi_norm),
+            "cell_radius_ratio": round(float(self.cell_radius_ratio), 3),
+            "cell_overrides": self.cell_overrides,
+            "last_saved": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            return True
+        except Exception as e:
+            print(f"[GridCellTracker] Ошибка сохранения конфига в {path}: {e}")
+            return False
+
+    def load_config(self, filepath: Optional[str] = None) -> bool:
+        """Загрузка калибровки матрицы из JSON-файла."""
+        path = Path(filepath) if filepath else self.config_path
+        if not path.exists():
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            if "rows" in data:
+                self.rows = max(1, min(int(data["rows"]), 12))
+            if "cols" in data:
+                self.cols = max(1, min(int(data["cols"]), 12))
+            if "roi_norm" in data and len(data["roi_norm"]) == 4:
+                self.set_roi(*data["roi_norm"])
+            if "cell_radius_ratio" in data:
+                self.cell_radius_ratio = max(0.1, min(float(data["cell_radius_ratio"]), 0.5))
+            if "cell_overrides" in data and isinstance(data["cell_overrides"], dict):
+                self.cell_overrides = data["cell_overrides"]
+            return True
+        except Exception as e:
+            print(f"[GridCellTracker] Ошибка чтения конфига из {path}: {e}")
+            return False
+
+    def autodetect_tray(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
+        """
+        Интеллектуальное автообнаружение лотка и посадочных отверстий:
+        1. Детекция круглых посадочных лунок (Hough Circles + контурный анализ).
+        2. Оценка прямоугольного контура лотка (Tray Envelope).
+        3. Если отверстия обнаружены - точная подгонка сетки ROI под центры крайних ячеек.
+        4. Если отверстия частично закрыты пологом - поиск кластера биомассы.
+        :param frame_bgr: Кадр с камеры
+        :return: Словарь с результатами детекции и новым ROI
+        """
+        if frame_bgr is None or frame_bgr.size == 0:
+            return {"status": "error", "message": "Пустой кадр", "roi": list(self.roi_norm)}
+
+        h, w = frame_bgr.shape[:2]
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        
+        # 1. Адаптивное улучшение контраста (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (9, 9), 2.0)
+
+        # 2. Поиск круглых посадочных отверстий через cv2.HoughCircles
+        # Ожидаемый радиус лунки в зависимости от разрешения кадра (обычно 10-40 px)
+        min_rad = max(8, int(min(w, h) * 0.02))
+        max_rad = max(min_rad + 5, int(min(w, h) * 0.09))
+        min_dist = max(15, int(min(w, h) * 0.06))
+
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_dist,
+            param1=70,
+            param2=32,
+            minRadius=min_rad,
+            maxRadius=max_rad
+        )
+
+        detected_centers = []
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            for c in circles[0, :]:
+                cx, cy, r = int(c[0]), int(c[1]), int(c[2])
+                # Фильтр по границам кадра
+                if 0.04 * w < cx < 0.96 * w and 0.04 * h < cy < 0.96 * h:
+                    detected_centers.append((cx, cy, r))
+
+        # 3. Дополнительный поиск круглых контуров (на случай слабоконтрастных отверстий)
+        if len(detected_centers) < 6:
+            thresh = cv2.adaptiveThreshold(
+                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3
+            )
+            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if 150 < area < (w * h * 0.04):
+                    perimeter = cv2.arcLength(cnt, True)
+                    if perimeter > 0:
+                        circularity = 4 * math.pi * (area / (perimeter * perimeter))
+                        if circularity > 0.65:
+                            (cx, cy), rad = cv2.minEnclosingCircle(cnt)
+                            cx, cy, rad = int(cx), int(cy), int(rad)
+                            if min_rad <= rad <= max_rad:
+                                if 0.04 * w < cx < 0.96 * w and 0.04 * h < cy < 0.96 * h:
+                                    # Проверяем отсутствие дубликатов
+                                    if not any(math.hypot(cx - oc[0], cy - oc[1]) < min_dist * 0.7 for oc in detected_centers):
+                                        detected_centers.append((cx, cy, rad))
+
+        # 4. Анализ найденных отверстий
+        detected_count = len(detected_centers)
+        new_roi = list(self.roi_norm)
+        confidence = 50.0
+        method = "default"
+
+        if detected_count >= 4:
+            # Найдено достаточное количество отверстий: строим охватывающий прямоугольник с отступом
+            xs = [c[0] for c in detected_centers]
+            ys = [c[1] for c in detected_centers]
+            avg_r = float(np.mean([c[2] for c in detected_centers]))
+
+            min_x = max(0, min(xs) - int(avg_r * 1.5))
+            max_x = min(w, max(xs) + int(avg_r * 1.5))
+            min_y = max(0, min(ys) - int(avg_r * 1.5))
+            max_y = min(h, max(ys) + int(avg_r * 1.5))
+
+            new_ymin = round(min_y / float(h), 3)
+            new_xmin = round(min_x / float(w), 3)
+            new_ymax = round(max_y / float(h), 3)
+            new_xmax = round(max_x / float(w), 3)
+
+            # Проверка разумности пропорций
+            if 0.15 < (new_xmax - new_xmin) < 0.95 and 0.15 < (new_ymax - new_ymin) < 0.95:
+                self.set_roi(new_ymin, new_xmin, new_ymax, new_xmax)
+                new_roi = list(self.roi_norm)
+                confidence = min(98.0, 60.0 + detected_count * 1.6)
+                method = "holes_envelope"
+
+        else:
+            # Попытка детекции внешнего прямоугольного контура лотка
+            _, bin_tray = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            tray_contours, _ = cv2.findContours(bin_tray, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            best_rect = None
+            max_area = 0
+
+            for cnt in tray_contours:
+                area = cv2.contourArea(cnt)
+                if area > (w * h * 0.20):  # Лоток занимает не менее 20% кадра
+                    x, y, tw, th = cv2.boundingRect(cnt)
+                    if area > max_area:
+                        max_area = area
+                        best_rect = (x, y, tw, th)
+
+            if best_rect:
+                x, y, tw, th = best_rect
+                # Небольшой внутренний отступ для рабочей зоны ячеек
+                pad_x = int(tw * 0.05)
+                pad_y = int(th * 0.05)
+                new_ymin = round(max(0, y + pad_y) / float(h), 3)
+                new_xmin = round(max(0, x + pad_x) / float(w), 3)
+                new_ymax = round(min(h, y + th - pad_y) / float(h), 3)
+                new_xmax = round(min(w, x + tw - pad_x) / float(w), 3)
+                self.set_roi(new_ymin, new_xmin, new_ymax, new_xmax)
+                new_roi = list(self.roi_norm)
+                confidence = 82.0
+                method = "tray_outer_contour"
+
+        # Сохраняем обновленные координаты
+        self.save_config()
+
+        return {
+            "status": "ok",
+            "method": method,
+            "detected_holes": detected_count,
+            "confidence": round(confidence, 1),
+            "roi": new_roi,
+            "rows": self.rows,
+            "cols": self.cols,
+            "cell_radius_ratio": self.cell_radius_ratio,
+            "message": f"Обнаружено {detected_count} посадочных лунок. Метод: {method}. ROI откалиброван."
+        }
 
     def _generate_grid_geometry(self, frame_w: int, frame_h: int) -> List[Dict[str, Any]]:
         """Расчет координат центров и радиусов 24 ячеек с учетом геометрии кадра."""
@@ -121,7 +356,7 @@ class GridCellTracker:
         radius = int(min(step_x, step_y) * self.cell_radius_ratio)
         radius = max(8, radius)
 
-        row_letters = ["A", "B", "C", "D", "E", "F", "G", "H"]
+        row_letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]
         cells_geo = []
 
         idx = 0
@@ -158,11 +393,7 @@ class GridCellTracker:
         foliage_mask: Optional[np.ndarray] = None
     ) -> List[CellMetrics]:
         """
-        Комплексный анализ всех 24 ячеек на кадре.
-        :param frame_bgr: Исходный кадр с камеры (BGR uint8)
-        :param exg_img: Предрассчитанный индекс Excess Green (опционально)
-        :param foliage_mask: Маска листвы (опционально, иначе вычисляется автоматически)
-        :return: Список метрик для каждой из 24 ячеек
+        Комплексный анализ всех ячеек на кадре с учетом ручных переопределений.
         """
         h, w = frame_bgr.shape[:2]
         now = time.time()
@@ -198,11 +429,10 @@ class GridCellTracker:
         upper_necrosis = np.array([25, 255, 90], dtype=np.uint8)
         necrosis_mask = cv2.inRange(hsv, lower_necrosis, upper_necrosis)
 
-        # Мицелий серой гнили (Botrytis / плесень: низкая насыщенность, средняя/высокая яркость)
+        # Мицелий серой гнили (Botrytis / плесень)
         lower_mold = np.array([0, 0, 110], dtype=np.uint8)
         upper_mold = np.array([180, 45, 210], dtype=np.uint8)
         mold_candidate = cv2.inRange(hsv, lower_mold, upper_mold)
-        # Исключаем чистый субстрат вне посадочной зоны
         mold_mask = np.where((mold_candidate > 0) & (exg_img < 15), 255, 0).astype(np.uint8)
 
         grid_geo = self._generate_grid_geometry(w, h)
@@ -213,7 +443,6 @@ class GridCellTracker:
             cx = item["cx"]
             cy = item["cy"]
             rad = item["radius"]
-            x1, y1, x2, y2 = item["bbox"]
 
             # Создаем круговую маску ячейки
             cell_circle_mask = np.zeros((h, w), dtype=np.uint8)
@@ -289,6 +518,32 @@ class GridCellTracker:
                 diag_en = "Mature Canopy"
                 health_idx = 100.0
 
+            # Применение пользовательских ручных переопределений
+            crop_name = "Микрозелень"
+            planted_date = ""
+            notes = ""
+            is_override = False
+
+            if cid in self.cell_overrides:
+                ov = self.cell_overrides[cid]
+                crop_name = ov.get("crop_name", crop_name)
+                planted_date = ov.get("planted_date", planted_date)
+                notes = ov.get("notes", notes)
+                
+                st_ov = ov.get("status_override")
+                if st_ov and st_ov not in ("AUTO", ""):
+                    status = st_ov
+                    is_override = True
+                    if st_ov == "HEALTHY":
+                        diag_ru = f"Вручную: Здорово ({crop_name})"
+                    elif st_ov == "WARNING":
+                        diag_ru = f"Вручную: Требует внимания ({crop_name})"
+                    elif st_ov == "CRITICAL":
+                        diag_ru = f"Вручную: Критично ({crop_name})"
+                    elif st_ov == "EMPTY":
+                        diag_ru = "Вручную: Пустая ячейка"
+                        stage = "EMPTY"
+
             metric = CellMetrics(
                 cell_id=cid,
                 index=item["index"],
@@ -314,6 +569,10 @@ class GridCellTracker:
                 status=status,
                 diagnosis_ru=diag_ru,
                 diagnosis_en=diag_en,
+                crop_name=crop_name,
+                planted_date=planted_date,
+                notes=notes,
+                is_manual_override=is_override,
                 last_updated=now
             )
             results.append(metric)
@@ -345,7 +604,11 @@ class GridCellTracker:
             "critical_cells": critical,
             "avg_coverage_percent": round(avg_cov * 100.0, 1),
             "avg_health_score": round(avg_health, 1),
-            "layout": f"{self.cols}x{self.rows}"
+            "layout": f"{self.cols}x{self.rows}",
+            "rows": self.rows,
+            "cols": self.cols,
+            "roi_norm": list(self.roi_norm),
+            "cell_radius_ratio": self.cell_radius_ratio
         }
 
     def draw_hud(
@@ -355,11 +618,7 @@ class GridCellTracker:
         show_summary: bool = True
     ) -> np.ndarray:
         """
-        Отрисовка технологичного киберпанк HUD-оверлея на кадре:
-        - Неоновые кольца вокруг каждой из 24 ячеек
-        - Цветовая дифференциация: Изумрудный (норма), Янтарный (хлороз), Алый (болезнь/плесень)
-        - Бейдж с ID ячейки и процентом покрытия
-        - Общая статус-панель сверху
+        Отрисовка технологичного киберпанк HUD-оверлея на кадре.
         """
         if metrics is None:
             metrics = self.last_metrics
@@ -367,13 +626,18 @@ class GridCellTracker:
         output = frame.copy()
         h, w = output.shape[:2]
 
-        # Цвета статусов в формате BGR
         color_map = {
-            "HEALTHY": (185, 245, 0),      # Неоновый изумрудно-зеленый #00F5B9
+            "HEALTHY": (185, 245, 0),      # Неоновый изумрудно-зеленый
             "WARNING": (50, 180, 255),     # Янтарно-оранжевый
             "CRITICAL": (80, 60, 255),     # Ярко-алый
             "EMPTY": (110, 100, 90)        # Приглушенный серо-синий
         }
+
+        # Отрисовка рамки рабочей зоны матрицы (ROI)
+        ymin, xmin, ymax, xmax = self.roi_norm
+        rx1, ry1 = int(xmin * w), int(ymin * h)
+        rx2, ry2 = int(xmax * w), int(ymax * h)
+        cv2.rectangle(output, (rx1, ry1), (rx2, ry2), (0, 245, 185), 1, cv2.LINE_AA)
 
         for m in metrics:
             color = color_map.get(m.status, (150, 150, 150))
@@ -392,7 +656,6 @@ class GridCellTracker:
             if m.status != "EMPTY":
                 tag_text += f": {int(m.coverage_ratio * 100)}%"
 
-            # Подложка под текст
             (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
             tx = cx - tw // 2
             ty = cy + 4
@@ -422,7 +685,7 @@ class GridCellTracker:
             cv2.putText(output, title_str, (14, 18), cv2.FONT_HERSHEY_DUPLEX, 0.46, (0, 245, 185), 1, cv2.LINE_AA)
 
             stat_str = (
-                f"Active: {summary['active_cells']}/24 | "
+                f"Active: {summary['active_cells']}/{summary['total_cells']} | "
                 f"Healthy: {summary['healthy_cells']} | "
                 f"Warn: {summary['warning_cells']} | "
                 f"Crit: {summary['critical_cells']} | "
@@ -454,11 +717,20 @@ class GridCellTracker:
                 "stage": m.stage,
                 "status": m.status,
                 "diag_ru": m.diagnosis_ru,
-                "diag_en": m.diagnosis_en
+                "diag_en": m.diagnosis_en,
+                "crop_name": m.crop_name,
+                "planted_date": m.planted_date,
+                "notes": m.notes,
+                "is_manual_override": m.is_manual_override
             })
 
         return {
             "summary": summary,
             "cells": cells_data,
+            "roi_norm": list(self.roi_norm),
+            "rows": self.rows,
+            "cols": self.cols,
+            "cell_radius_ratio": self.cell_radius_ratio,
+            "cell_overrides": self.cell_overrides,
             "timestamp": time.time()
         }

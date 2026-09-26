@@ -459,14 +459,60 @@ class SystemHub:
             self.bridge.send_command("reset_sprout")
         self.sync_with_esp32()
 
-    def pet_plant(self):
-        """Отправить сигнал заботы о растении."""
-        self.log("Пользователь погладил растение! Отправка команды на дисплей инкубатора...", "action")
-        self.bridge.send_command("pet")
-        # Временный подъем настроения/здоровья на 1-2%
+    def autodetect_cells(self) -> Dict[str, Any]:
+        """Автоматическое обнаружение лотка и лунок на текущем кадре камеры."""
+        frame = None
+        if self.cap and self.cap.isOpened():
+            ret, raw = self.cap.read()
+            if ret:
+                frame = raw
+        if frame is None:
+            sample_path = SCRIPT_DIR / "test_leaf.jpg"
+            if sample_path.exists():
+                frame = cv2.imread(str(sample_path))
+        if frame is None:
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
         with self.lock:
-            self.last_diagnosis["health_score"] = min(100.0, self.last_diagnosis["health_score"] + 1.5)
-        self.sync_with_esp32()
+            res = self.cell_tracker.autodetect_tray(frame)
+        self.log(f"Автообнаружение матрицы: {res.get('message', '')}", "success" if res.get("status") == "ok" else "warning")
+        return res
+
+    def update_cell_config(self, rows: int, cols: int, ymin: float, xmin: float, ymax: float, xmax: float, radius_ratio: float):
+        """Обновление геометрии матрицы ячеек и сохранение конфигурации."""
+        with self.lock:
+            self.cell_tracker.set_geometry(rows, cols, (ymin, xmin, ymax, xmax), radius_ratio)
+            self.cell_tracker.save_config()
+        self.log(f"Обновлена геометрия матрицы: {cols}x{rows}, ROI=({ymin:.2f}, {xmin:.2f}, {ymax:.2f}, {xmax:.2f})", "success")
+
+    def set_cell_override(self, cell_id: str, crop_name: str, planted_date: str, status_override: str, notes: str):
+        """Установить ручные параметры для отдельной ячейки."""
+        with self.lock:
+            self.cell_tracker.set_cell_override(
+                cell_id=cell_id,
+                crop_name=crop_name,
+                planted_date=planted_date,
+                status_override=status_override,
+                notes=notes
+            )
+        self.log(f"Обновлены параметры ячейки {cell_id}: {crop_name} [{status_override}]", "action")
+
+    def clear_cell_override(self, cell_id: str):
+        """Сбросить ручные параметры ячейки."""
+        with self.lock:
+            self.cell_tracker.clear_cell_override(cell_id)
+        self.log(f"Сброшены ручные параметры ячейки {cell_id}", "action")
+
+    def reset_cell_config(self):
+        """Сброс конфигурации матрицы к заводским параметрам 4x6."""
+        with self.lock:
+            self.cell_tracker.rows = 6
+            self.cell_tracker.cols = 4
+            self.cell_tracker.roi_norm = (0.06, 0.08, 0.94, 0.92)
+            self.cell_tracker.cell_radius_ratio = 0.38
+            self.cell_tracker.cell_overrides.clear()
+            self.cell_tracker.save_config()
+        self.log("Конфигурация матрицы сброшена к заводским параметрам (4x6)", "action")
 
     def get_full_state(self) -> Dict[str, Any]:
         """Сборка полного JSON состояния для веб-клиента."""
@@ -636,6 +682,23 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
                 self._send_json({"summary": {}, "cells": []})
             return
 
+        # 6. REST API: Конфигурация геометрии и переопределений матрицы
+        elif path == "/api/cells/config":
+            if hub and hub.cell_tracker:
+                with hub.lock:
+                    cfg = {
+                        "status": "ok",
+                        "rows": hub.cell_tracker.rows,
+                        "cols": hub.cell_tracker.cols,
+                        "roi_norm": list(hub.cell_tracker.roi_norm),
+                        "cell_radius_ratio": hub.cell_tracker.cell_radius_ratio,
+                        "cell_overrides": hub.cell_tracker.cell_overrides
+                    }
+                self._send_json(cfg)
+            else:
+                self._send_json({"error": "no tracker"}, 500)
+            return
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -671,7 +734,7 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": "no hub"}, 500)
 
-        # 3. Переключение режима видео (RGB, EXG маска, Split)
+        # 3. Переключение режима видео (RGB, EXG маска, Split, Grid)
         elif path == "/api/video/mode":
             mode = str(post_data.get("mode", "rgb"))
             if hub:
@@ -735,7 +798,7 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json({"error": "no hub"}, 500)
 
-        # 8. Калибровка рабочей зоны матрицы 24 ячеек
+        # 8. Калибровка рабочей зоны матрицы (ROI)
         elif path == "/api/cells/calibrate":
             if hub and hub.cell_tracker:
                 ymin = float(post_data.get("ymin", 0.06))
@@ -743,8 +806,69 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
                 ymax = float(post_data.get("ymax", 0.94))
                 xmax = float(post_data.get("xmax", 0.92))
                 hub.cell_tracker.set_roi(ymin, xmin, ymax, xmax)
+                hub.cell_tracker.save_config()
                 hub.log(f"Калибровка сетки ячеек: ROI=({ymin:.2f}, {xmin:.2f}, {ymax:.2f}, {xmax:.2f})", "success")
                 self._send_json({"status": "ok", "roi": [ymin, xmin, ymax, xmax]})
+            else:
+                self._send_json({"error": "no tracker"}, 500)
+
+        # 9. Интеллектуальное автообнаружение лотка и ячеек (Computer Vision)
+        elif path == "/api/cells/autodetect":
+            if hub:
+                res = hub.autodetect_cells()
+                self._send_json(res)
+            else:
+                self._send_json({"error": "no hub"}, 500)
+
+        # 10. Сохранение полной конфигурации матрицы (ряды, колонки, ROI, радиус)
+        elif path == "/api/cells/config":
+            if hub and hub.cell_tracker:
+                rows = int(post_data.get("rows", hub.cell_tracker.rows))
+                cols = int(post_data.get("cols", hub.cell_tracker.cols))
+                ymin = float(post_data.get("ymin", hub.cell_tracker.roi_norm[0]))
+                xmin = float(post_data.get("xmin", hub.cell_tracker.roi_norm[1]))
+                ymax = float(post_data.get("ymax", hub.cell_tracker.roi_norm[2]))
+                xmax = float(post_data.get("xmax", hub.cell_tracker.roi_norm[3]))
+                radius_ratio = float(post_data.get("radius_ratio", hub.cell_tracker.cell_radius_ratio))
+                hub.update_cell_config(rows, cols, ymin, xmin, ymax, xmax, radius_ratio)
+                self._send_json({
+                    "status": "ok",
+                    "message": f"Конфигурация матрицы сохранена ({cols}x{rows})",
+                    "rows": rows,
+                    "cols": cols,
+                    "roi": [ymin, xmin, ymax, xmax],
+                    "radius_ratio": radius_ratio
+                })
+            else:
+                self._send_json({"error": "no tracker"}, 500)
+
+        # 11. Ручное редактирование отдельной ячейки (культура, дата, статус, заметки)
+        elif path == "/api/cells/override":
+            if hub and hub.cell_tracker:
+                cid = str(post_data.get("cell_id", "")).upper()
+                crop = post_data.get("crop_name", "")
+                planted = post_data.get("planted_date", "")
+                status = post_data.get("status_override", "AUTO")
+                notes = post_data.get("notes", "")
+                hub.set_cell_override(cid, crop, planted, status, notes)
+                self._send_json({"status": "ok", "message": f"Ячейка {cid} обновлена"})
+            else:
+                self._send_json({"error": "no tracker"}, 500)
+
+        # 12. Сброс ручных параметров ячейки к автоматическим
+        elif path == "/api/cells/clear_override":
+            if hub and hub.cell_tracker:
+                cid = str(post_data.get("cell_id", "")).upper()
+                hub.clear_cell_override(cid)
+                self._send_json({"status": "ok", "message": f"Параметры ячейки {cid} сброшены"})
+            else:
+                self._send_json({"error": "no tracker"}, 500)
+
+        # 13. Сброс матрицы к заводским настройкам (4x6)
+        elif path == "/api/cells/reset_config":
+            if hub:
+                hub.reset_cell_config()
+                self._send_json({"status": "ok", "message": "Матрица сброшена к заводским параметрам 4x6"})
             else:
                 self._send_json({"error": "no tracker"}, 500)
 
@@ -1518,7 +1642,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       background: rgba(14, 20, 30, 0.95);
       border: 1px solid var(--border-subtle);
       border-radius: 10px;
-      padding: 10px 12px;
+      padding: 12px 14px;
     }
 
     .stat-pill {
@@ -1537,7 +1661,66 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       margin-bottom: 2px;
     }
 
-    /* OTA MODAL */
+    /* CYBER FORM CONTROLS & SLIDERS */
+    .input-cyber {
+      width: 100%;
+      background: rgba(10, 15, 24, 0.9);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-family: inherit;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .input-cyber:focus {
+      border-color: var(--accent-green);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+    }
+
+    .slider-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 10px;
+    }
+
+    .slider-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.76rem;
+      color: var(--text-muted);
+    }
+
+    .slider-cyber {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.1);
+      outline: none;
+    }
+
+    .slider-cyber::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      cursor: pointer;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+      transition: all 0.15s;
+    }
+
+    .slider-cyber::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    /* OTA & MATRIX MODALS */
     .ota-modal-overlay {
       position: fixed;
       top: 0;
@@ -1558,10 +1741,12 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       border: 1px solid var(--border-subtle);
       border-radius: var(--radius-lg);
       padding: 1.5rem;
-      max-width: 480px;
+      max-width: 540px;
       width: 100%;
       box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
       animation: modalFadeIn 0.25s ease;
+      max-height: 90vh;
+      overflow-y: auto;
     }
 
     @keyframes modalFadeIn {
@@ -1725,15 +1910,17 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         <div class="card-header">
           <div class="card-title">
             <span class="icon">🌿</span>
-            <span id="txt-matrix-title">Поячеечная матрица лотка v2 (24 ячейки: 4×6)</span>
+            <span id="txt-matrix-title">Поячеечная матрица лотка v2</span>
           </div>
-          <div style="display:flex; gap:8px; align-items:center;">
+          <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
             <span class="badge badge-healthy" id="cells-summary-badge">24 / 24 Ячеек</span>
-            <button class="btn-action" style="padding: 0.3rem 0.65rem; font-size: 0.75rem;" onclick="setVideoMode('grid')">🔍 HUD на видео</button>
+            <button class="btn-action" style="padding: 0.3rem 0.65rem; font-size: 0.75rem; background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3);" onclick="autoDetectMatrix()" title="Автоматическое обнаружение лотка и лунок по зрению">🎯 Автопоиск</button>
+            <button class="btn-action" style="padding: 0.3rem 0.65rem; font-size: 0.75rem;" onclick="openMatrixModal()" title="Ручная калибровка геометрии матрицы">⚙️ Настройка</button>
+            <button class="btn-action" style="padding: 0.3rem 0.65rem; font-size: 0.75rem;" onclick="setVideoMode('grid')">🔍 HUD</button>
           </div>
         </div>
 
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:0.75rem; color:var(--text-muted);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:0.75rem; color:var(--text-muted); flex-wrap:wrap; gap:4px;">
           <div id="cells-quick-stats">Активно: -- | Здорово: -- | Внимание: --</div>
           <div style="display:flex; gap:8px; font-size: 0.72rem;">
             <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Здорово</span>
@@ -1744,22 +1931,64 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <div id="cells-matrix-grid" class="cells-grid-matrix">
-           <!-- Динамическая сетка 24 ячеек (4 колонки x 6 рядов) -->
+           <!-- Динамическая сетка ячеек (например 4 колонки x 6 рядов) -->
         </div>
 
-        <!-- Панель детального осмотра выбранной ячейки -->
+        <!-- Панель детального осмотра и ручного редактирования ячейки -->
         <div id="cell-inspector-panel" class="cell-inspector-box" style="display:none;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <strong style="color:var(--accent-green); font-size:0.88rem;" id="ins-cell-title">Ячейка A1</strong>
-            <span class="badge" id="ins-cell-badge">ЗДОРОВО</span>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <strong style="color:var(--accent-green); font-size:0.95rem;" id="ins-cell-title">Ячейка A1</strong>
+              <span class="badge" id="ins-cell-badge">ЗДОРОВО</span>
+              <span class="badge" id="ins-cell-override-badge" style="display:none; background:rgba(6,182,212,0.15); color:var(--accent-cyan); border:1px solid rgba(6,182,212,0.3);">РУЧНОЙ РЕЖИМ</span>
+            </div>
+            <button style="background:transparent; border:none; color:var(--text-muted); cursor:pointer; font-size:0.9rem;" onclick="document.getElementById('cell-inspector-panel').style.display='none'">✕</button>
           </div>
-          <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; font-size:0.75rem; margin-bottom:8px;">
+
+          <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; font-size:0.75rem; margin-bottom:10px;">
             <div class="stat-pill"><span class="lbl">Покрытие</span><strong id="ins-cov">--%</strong></div>
             <div class="stat-pill"><span class="lbl">Хлороз</span><strong id="ins-chl">--%</strong></div>
             <div class="stat-pill"><span class="lbl">Плесень</span><strong id="ins-mld">--%</strong></div>
             <div class="stat-pill"><span class="lbl">Здоровье</span><strong id="ins-hlth">--%</strong></div>
           </div>
-          <div style="font-size:0.75rem; color:var(--text-muted); font-style:italic;" id="ins-cell-diag">Диагноз: Ожидание данных...</div>
+          <div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:12px;" id="ins-cell-diag">Диагноз: Ожидание данных...</div>
+
+          <!-- Форма ручного редактирования ячейки -->
+          <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:8px; padding:10px;">
+            <div style="font-weight:700; font-size:0.78rem; color:var(--accent-cyan); margin-bottom:8px; display:flex; align-items:center; gap:4px;">
+              <span>✏️</span> Ручное редактирование ячейки
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:8px;">
+              <div>
+                <label style="display:block; font-size:0.7rem; color:var(--text-dim); margin-bottom:3px;">Культура / Растение:</label>
+                <input type="text" id="ins-input-crop" class="input-cyber" placeholder="например Базилик" />
+              </div>
+              <div>
+                <label style="display:block; font-size:0.7rem; color:var(--text-dim); margin-bottom:3px;">Дата посева:</label>
+                <input type="text" id="ins-input-date" class="input-cyber" placeholder="ГГГГ-ММ-ДД" />
+              </div>
+            </div>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-bottom:10px;">
+              <div>
+                <label style="display:block; font-size:0.7rem; color:var(--text-dim); margin-bottom:3px;">Статус / Состояние:</label>
+                <select id="ins-select-status" class="input-cyber">
+                  <option value="AUTO">🤖 Авто-AI (Детекция нейросетью)</option>
+                  <option value="HEALTHY">🟢 Здорово (Норма)</option>
+                  <option value="WARNING">🟡 Внимание (Хлороз / дефицит)</option>
+                  <option value="CRITICAL">🔴 Критично (Плесень / гниль)</option>
+                  <option value="EMPTY">⚪ Пустая ячейка / свободна</option>
+                </select>
+              </div>
+              <div>
+                <label style="display:block; font-size:0.7rem; color:var(--text-dim); margin-bottom:3px;">Заметки / Примечание:</label>
+                <input type="text" id="ins-input-notes" class="input-cyber" placeholder="Посев 5 семян..." />
+              </div>
+            </div>
+            <div style="display:flex; gap:8px; justify-content:flex-end;">
+              <button class="btn-action" style="padding:0.4rem 0.8rem; font-size:0.75rem;" onclick="clearSelectedCell()">↺ Сброс в Авто</button>
+              <button class="btn-action" style="padding:0.4rem 0.9rem; font-size:0.75rem; background:linear-gradient(135deg,#10b981,#06b6d4); color:#000; font-weight:700;" onclick="saveSelectedCell()">💾 Сохранить ячейку</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1918,6 +2147,79 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           🚀 Открыть Веб-программатор (/update)
         </button>
         <button class="btn-action" style="padding:0.6rem 1rem;" onclick="closeOtaModal()">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MATRIX CALIBRATION & AUTODETECT MODAL -->
+  <div id="matrix-modal" class="ota-modal-overlay" style="display:none;" onclick="if(event.target===this)closeMatrixModal()">
+    <div class="ota-modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:1.1rem; color:var(--accent-green); display:flex; align-items:center; gap:8px;">
+          <span>⚙️</span> Калибровка матрицы ячеек
+        </h3>
+        <button style="background:transparent; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;" onclick="closeMatrixModal()">✕</button>
+      </div>
+      <p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:14px;">
+        Настройка геометрии сетки (ряды/колонки) и границ рабочей зоны лотка (ROI) под ракурс камеры инкубатора.
+      </p>
+
+      <!-- Быстрое автообнаружение -->
+      <div style="background:rgba(16,185,129,0.08); border:1px solid rgba(16,185,129,0.25); border-radius:10px; padding:12px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <div>
+          <div style="font-size:0.82rem; font-weight:700; color:var(--accent-green);">🎯 Компьютерное зрение (Auto-CV)</div>
+          <div style="font-size:0.72rem; color:var(--text-dim);" id="autodetect-status-msg">Автоматический поиск посадочных отверстий и контура лотка</div>
+        </div>
+        <button class="btn-action" style="padding:0.45rem 0.9rem; font-size:0.78rem; background:linear-gradient(135deg,#10b981,#06b6d4); color:#000; font-weight:700;" onclick="autoDetectMatrixModal()">
+          🎯 Запустить автопоиск
+        </button>
+      </div>
+
+      <!-- Сетка: Ряды и Колонки -->
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:14px;">
+        <div>
+          <label style="display:block; font-size:0.74rem; color:var(--text-dim); margin-bottom:4px;">Количество рядов (Rows, Y):</label>
+          <input type="number" id="mat-rows" min="1" max="12" value="6" class="input-cyber" onchange="updateMatrixModalPreview()" />
+        </div>
+        <div>
+          <label style="display:block; font-size:0.74rem; color:var(--text-dim); margin-bottom:4px;">Количество колонок (Cols, X):</label>
+          <input type="number" id="mat-cols" min="1" max="12" value="4" class="input-cyber" onchange="updateMatrixModalPreview()" />
+        </div>
+      </div>
+
+      <!-- Ползунки ROI -->
+      <div style="background:rgba(255,255,255,0.02); border:1px solid var(--border-subtle); border-radius:10px; padding:12px; margin-bottom:16px;">
+        <div style="font-weight:700; font-size:0.78rem; color:var(--text-main); margin-bottom:10px;">📐 Границы рабочей зоны (ROI) в кадре:</div>
+        
+        <div class="slider-row">
+          <div class="slider-label"><span>Верх (Y Min):</span><strong id="lbl-mat-ymin" style="color:var(--accent-green)">6%</strong></div>
+          <input type="range" id="slider-mat-ymin" min="0" max="85" value="6" class="slider-cyber" oninput="updateMatrixSliderLabels()" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-label"><span>Низ (Y Max):</span><strong id="lbl-mat-ymax" style="color:var(--accent-green)">94%</strong></div>
+          <input type="range" id="slider-mat-ymax" min="15" max="100" value="94" class="slider-cyber" oninput="updateMatrixSliderLabels()" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-label"><span>Лево (X Min):</span><strong id="lbl-mat-xmin" style="color:var(--accent-green)">8%</strong></div>
+          <input type="range" id="slider-mat-xmin" min="0" max="85" value="8" class="slider-cyber" oninput="updateMatrixSliderLabels()" />
+        </div>
+        <div class="slider-row">
+          <div class="slider-label"><span>Право (X Max):</span><strong id="lbl-mat-xmax" style="color:var(--accent-green)">92%</strong></div>
+          <input type="range" id="slider-mat-xmax" min="15" max="100" value="92" class="slider-cyber" oninput="updateMatrixSliderLabels()" />
+        </div>
+        <div class="slider-row" style="margin-bottom:0;">
+          <div class="slider-label"><span>Радиус ячеек:</span><strong id="lbl-mat-rad" style="color:var(--accent-cyan)">38%</strong></div>
+          <input type="range" id="slider-mat-rad" min="10" max="50" value="38" class="slider-cyber" oninput="updateMatrixSliderLabels()" />
+        </div>
+      </div>
+
+      <!-- Кнопки действий -->
+      <div style="display:flex; gap:8px; justify-content:space-between; flex-wrap:wrap;">
+        <button class="btn-action" style="padding:0.5rem 0.8rem; font-size:0.75rem;" onclick="resetMatrixModal()">↺ Заводские (4x6)</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-action" style="padding:0.5rem 0.9rem; font-size:0.75rem;" onclick="closeMatrixModal()">Закрыть</button>
+          <button class="btn-action" style="padding:0.5rem 1rem; font-size:0.75rem; background:linear-gradient(135deg,#10b981,#06b6d4); color:#000; font-weight:700;" onclick="saveMatrixModal()">💾 Сохранить и применить</button>
+        </div>
       </div>
     </div>
   </div>
@@ -2166,9 +2468,10 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('footer-infer').innerText = `Inference: ${data.plant.inference_ms} ms | ${data.plant.fps} FPS | ONNX ARM NEON`;
     }
 
-    // 24-CELL MATRIX CLIENT LOGIC
+    // 24-CELL MATRIX CLIENT LOGIC & CALIBRATION
     let selectedCellId = null;
     let cachedCellsData = [];
+    let cachedMatrixConfig = null;
 
     function renderCellsMatrix(cells, summary) {
       if (!cells || cells.length === 0) return;
@@ -2177,11 +2480,18 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       if (!grid) return;
 
       if (summary) {
+        if (summary.cols) {
+          grid.style.gridTemplateColumns = `repeat(${summary.cols}, 1fr)`;
+        }
         const badge = document.getElementById('cells-summary-badge');
-        if (badge) badge.innerText = `${summary.active_cells || 0}/24 Активно`;
+        if (badge) badge.innerText = `${summary.active_cells || 0}/${summary.total_cells || 24} Ячеек`;
         const qStats = document.getElementById('cells-quick-stats');
         if (qStats) {
           qStats.innerText = `Здорово: ${summary.healthy_cells || 0} | Внимание: ${summary.warning_cells || 0} | Критично: ${summary.critical_cells || 0} | Полог: ${summary.avg_coverage_percent || 0}%`;
+        }
+        const titleEl = document.getElementById('txt-matrix-title');
+        if (titleEl && summary.layout) {
+          titleEl.innerText = `Поячеечная матрица лотка v2 (${summary.layout})`;
         }
       }
 
@@ -2195,12 +2505,16 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
         const isSel = (c.id === selectedCellId) ? 'selected' : '';
         const covVal = Math.round(c.coverage);
+        const cropBadge = (c.crop_name && c.crop_name !== 'Микрозелень') ? `<span style="font-size:0.6rem; color:var(--accent-cyan); display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.crop_name}</span>` : '';
+        const overrideDot = c.is_manual_override ? `<span title="Ручной режим" style="color:var(--accent-cyan); font-size:0.65rem;">⚙️</span>` : '';
+
         html += `
           <div class="cell-tile ${isSel}" onclick="selectCell('${c.id}')" id="tile-${c.id}">
             <div class="cell-tile-id">
-              <span>${c.id}</span>
+              <span>${c.id} ${overrideDot}</span>
               <span class="cell-tile-dot" style="background:${color}"></span>
             </div>
+            ${cropBadge}
             <div class="cell-cov-bar-bg">
               <div class="cell-cov-bar-fill" style="width:${covVal}%; background:${barColor};"></div>
             </div>
@@ -2243,11 +2557,211 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         badge.className = 'badge';
       }
 
+      const ovBadge = document.getElementById('ins-cell-override-badge');
+      if (ovBadge) {
+        ovBadge.style.display = c.is_manual_override ? 'inline-block' : 'none';
+      }
+
       document.getElementById('ins-cov').innerText = `${Math.round(c.coverage)}%`;
       document.getElementById('ins-chl').innerText = `${Math.round(c.chlorosis)}%`;
       document.getElementById('ins-mld').innerText = `${Math.round(c.mold)}%`;
       document.getElementById('ins-hlth').innerText = `${Math.round(c.health)}%`;
       document.getElementById('ins-cell-diag').innerText = `Диагноз: ${c.diag_ru || c.status}. Средний ExG: ${c.exg || 0}.`;
+
+      // Заполнение формы ручного редактирования
+      const inCrop = document.getElementById('ins-input-crop');
+      const inDate = document.getElementById('ins-input-date');
+      const inStatus = document.getElementById('ins-select-status');
+      const inNotes = document.getElementById('ins-input-notes');
+
+      if (inCrop && document.activeElement !== inCrop) inCrop.value = c.crop_name || '';
+      if (inDate && document.activeElement !== inDate) inDate.value = c.planted_date || '';
+      if (inStatus && document.activeElement !== inStatus) inStatus.value = c.is_manual_override ? c.status : 'AUTO';
+      if (inNotes && document.activeElement !== inNotes) inNotes.value = c.notes || '';
+    }
+
+    async function saveSelectedCell() {
+      if (!selectedCellId) return;
+      const crop = document.getElementById('ins-input-crop').value;
+      const planted = document.getElementById('ins-input-date').value;
+      const status = document.getElementById('ins-select-status').value;
+      const notes = document.getElementById('ins-input-notes').value;
+
+      try {
+        const res = await fetch('/api/cells/override', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            cell_id: selectedCellId,
+            crop_name: crop,
+            planted_date: planted,
+            status_override: status,
+            notes: notes
+          })
+        });
+        const data = await res.json();
+        showToast(`💾 Параметры ячейки ${selectedCellId} сохранены`);
+        fetchState();
+      } catch (e) {
+        console.error('Save cell override error:', e);
+      }
+    }
+
+    async function clearSelectedCell() {
+      if (!selectedCellId) return;
+      try {
+        const res = await fetch('/api/cells/clear_override', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({cell_id: selectedCellId})
+        });
+        showToast(`↺ Ячейка ${selectedCellId} возвращена в режим Авто-AI`);
+        fetchState();
+      } catch (e) {
+        console.error('Clear cell override error:', e);
+      }
+    }
+
+    // MATRIX CALIBRATION & AUTODETECT MODAL LOGIC
+    async function openMatrixModal() {
+      const modal = document.getElementById('matrix-modal');
+      if (modal) modal.style.display = 'flex';
+
+      try {
+        const res = await fetch('/api/cells/config');
+        if (res.ok) {
+          const cfg = await res.json();
+          cachedMatrixConfig = cfg;
+          if (cfg.rows) document.getElementById('mat-rows').value = cfg.rows;
+          if (cfg.cols) document.getElementById('mat-cols').value = cfg.cols;
+          if (cfg.roi_norm && cfg.roi_norm.length === 4) {
+            document.getElementById('slider-mat-ymin').value = Math.round(cfg.roi_norm[0] * 100);
+            document.getElementById('slider-mat-xmin').value = Math.round(cfg.roi_norm[1] * 100);
+            document.getElementById('slider-mat-ymax').value = Math.round(cfg.roi_norm[2] * 100);
+            document.getElementById('slider-mat-xmax').value = Math.round(cfg.roi_norm[3] * 100);
+          }
+          if (cfg.cell_radius_ratio) {
+            document.getElementById('slider-mat-rad').value = Math.round(cfg.cell_radius_ratio * 100);
+          }
+          updateMatrixSliderLabels();
+        }
+      } catch (e) {
+        console.warn('Failed to load matrix config:', e);
+      }
+    }
+
+    function closeMatrixModal() {
+      const modal = document.getElementById('matrix-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function updateMatrixSliderLabels() {
+      const ymin = document.getElementById('slider-mat-ymin').value;
+      const ymax = document.getElementById('slider-mat-ymax').value;
+      const xmin = document.getElementById('slider-mat-xmin').value;
+      const xmax = document.getElementById('slider-mat-xmax').value;
+      const rad = document.getElementById('slider-mat-rad').value;
+
+      document.getElementById('lbl-mat-ymin').innerText = `${ymin}%`;
+      document.getElementById('lbl-mat-ymax').innerText = `${ymax}%`;
+      document.getElementById('lbl-mat-xmin').innerText = `${xmin}%`;
+      document.getElementById('lbl-mat-xmax').innerText = `${xmax}%`;
+      document.getElementById('lbl-mat-rad').innerText = `${rad}%`;
+    }
+
+    function updateMatrixModalPreview() {
+      // Live validation
+      const r = Math.max(1, Math.min(12, parseInt(document.getElementById('mat-rows').value) || 6));
+      const c = Math.max(1, Math.min(12, parseInt(document.getElementById('mat-cols').value) || 4));
+      document.getElementById('mat-rows').value = r;
+      document.getElementById('mat-cols').value = c;
+    }
+
+    async function autoDetectMatrix() {
+      showToast('🎯 Запуск Computer Vision автопоиска лотка...');
+      try {
+        const res = await fetch('/api/cells/autodetect', {method: 'POST'});
+        const data = await res.json();
+        if (data.status === 'ok') {
+          showToast(`✅ Найдено ${data.detected_holes || 0} лунок! ROI откалиброван.`);
+          fetchState();
+        } else {
+          showToast(`⚠️ ${data.message || 'Ошибка автообнаружения'}`);
+        }
+      } catch (e) {
+        console.error('Autodetect error:', e);
+      }
+    }
+
+    async function autoDetectMatrixModal() {
+      const msgEl = document.getElementById('autodetect-status-msg');
+      if (msgEl) msgEl.innerText = 'Анализ кадра и поиск круглых посадочных лунок...';
+
+      try {
+        const res = await fetch('/api/cells/autodetect', {method: 'POST'});
+        const data = await res.json();
+        if (data.status === 'ok') {
+          if (data.roi && data.roi.length === 4) {
+            document.getElementById('slider-mat-ymin').value = Math.round(data.roi[0] * 100);
+            document.getElementById('slider-mat-xmin').value = Math.round(data.roi[1] * 100);
+            document.getElementById('slider-mat-ymax').value = Math.round(data.roi[2] * 100);
+            document.getElementById('slider-mat-xmax').value = Math.round(data.roi[3] * 100);
+          }
+          if (data.rows) document.getElementById('mat-rows').value = data.rows;
+          if (data.cols) document.getElementById('mat-cols').value = data.cols;
+          updateMatrixSliderLabels();
+          if (msgEl) msgEl.innerText = `Успешно: найдено ${data.detected_holes} лунок (точность ${data.confidence}%).`;
+          showToast(`🎯 Автообнаружение: найдено ${data.detected_holes} лунок`);
+          fetchState();
+        } else {
+          if (msgEl) msgEl.innerText = data.message || 'Не удалось найти лунки';
+        }
+      } catch (e) {
+        if (msgEl) msgEl.innerText = 'Ошибка запроса автообнаружения';
+      }
+    }
+
+    async function saveMatrixModal() {
+      const rows = parseInt(document.getElementById('mat-rows').value) || 6;
+      const cols = parseInt(document.getElementById('mat-cols').value) || 4;
+      const ymin = (parseFloat(document.getElementById('slider-mat-ymin').value) || 6) / 100.0;
+      const ymax = (parseFloat(document.getElementById('slider-mat-ymax').value) || 94) / 100.0;
+      const xmin = (parseFloat(document.getElementById('slider-mat-xmin').value) || 8) / 100.0;
+      const xmax = (parseFloat(document.getElementById('slider-mat-xmax').value) || 92) / 100.0;
+      const radRatio = (parseFloat(document.getElementById('slider-mat-rad').value) || 38) / 100.0;
+
+      try {
+        const res = await fetch('/api/cells/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            rows: rows,
+            cols: cols,
+            ymin: ymin,
+            xmin: xmin,
+            ymax: ymax,
+            xmax: xmax,
+            radius_ratio: radRatio
+          })
+        });
+        const data = await res.json();
+        showToast(`💾 Конфигурация матрицы ${cols}x${rows} сохранена!`);
+        closeMatrixModal();
+        fetchState();
+      } catch (e) {
+        console.error('Save matrix config error:', e);
+      }
+    }
+
+    async function resetMatrixModal() {
+      try {
+        const res = await fetch('/api/cells/reset_config', {method: 'POST'});
+        showToast('↺ Матрица сброшена к заводским параметрам 4x6');
+        openMatrixModal();
+        fetchState();
+      } catch (e) {
+        console.error('Reset matrix config error:', e);
+      }
     }
 
     function openOtaModal() {
