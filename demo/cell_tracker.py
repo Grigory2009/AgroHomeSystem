@@ -3,10 +3,12 @@ AgroHomeSystem - Per-Cell Plant Tracking & Matrix Calibration Engine
 =============================================================================
 Модуль индивидуального поячеечного трекинга для 3D-корпуса AgroHomeSystem v2
 (лоток на 24 ячейки: сетка 4x6 под минераловатные пробки 22 мм) с поддержкой:
-1. Автоматического обнаружения лотка и посадочных отверстий (Computer Vision).
-2. Ручной калибровки геометрии матрицы (ROI, радиусы, ряды/колонки).
-3. Индивидуального ручного редактирования ячеек (культура, статус, дата, заметки).
-4. Сохранения и загрузки конфигурации в JSON (cell_grid_config.json).
+1. Распознавания желтых минераловатных пробок (22 мм Rockwool plugs).
+2. Автоматического обнаружения лотка и посадочных пробок (Computer Vision).
+3. Разделения спектра: Минвата (желтый субстрат) vs Листва vs Хлороз vs Плесень.
+4. Ручной калибровки геометрии матрицы (ROI, радиусы, ряды/колонки).
+5. Индивидуального ручного редактирования ячеек (культура, статус, дата, заметки).
+6. Сохранения и загрузки конфигурации в JSON (cell_grid_config.json).
 =============================================================================
 """
 
@@ -36,19 +38,21 @@ class CellMetrics:
     total_pixels: int = 0             # Всего пикселей внутри маски ячейки
     foliage_pixels: int = 0           # Пикселей растительной биомассы
     healthy_green_pixels: int = 0     # Пикселей сочного зеленого хлорофилла
-    chlorosis_pixels: int = 0         # Пикселей пожелтения/хлороза
+    chlorosis_pixels: int = 0         # Пикселей истинного пожелтения/хлороза листвы
     necrosis_pixels: int = 0          # Пикселей отмершей ткани
     mold_pixels: int = 0              # Пикселей мицелия плесени
+    rockwool_pixels: int = 0          # Пикселей желтой минеральной ваты (субстрат)
     
-    coverage_ratio: float = 0.0       # 0.0 .. 1.0 (площадь покрытия ячейки)
+    coverage_ratio: float = 0.0       # 0.0 .. 1.0 (площадь покрытия ячейки растением)
     chlorosis_ratio: float = 0.0      # Доля хлороза от биомассы
     necrosis_ratio: float = 0.0       # Доля некроза от биомассы
     mold_ratio: float = 0.0           # Доля мицелия от ячейки
+    rockwool_ratio: float = 0.0       # Доля желтой минваты в гнезде
     mean_exg: float = 0.0             # Средний индекс Excess Green
     
     health_index: float = 100.0       # 0.0 .. 100.0 %
-    stage: str = "EMPTY"              # "EMPTY", "GERMINATING", "SPROUT", "MATURE"
-    status: str = "EMPTY"             # "HEALTHY", "WARNING", "CRITICAL", "EMPTY"
+    stage: str = "EMPTY"              # "EMPTY", "ROCKWOOL", "GERMINATING", "SPROUT", "MATURE"
+    status: str = "EMPTY"             # "HEALTHY", "WARNING", "CRITICAL", "ROCKWOOL", "EMPTY"
     diagnosis_ru: str = "Свободно"
     diagnosis_en: str = "Empty"
     
@@ -200,11 +204,10 @@ class GridCellTracker:
 
     def autodetect_tray(self, frame_bgr: np.ndarray) -> Dict[str, Any]:
         """
-        Интеллектуальное автообнаружение лотка и посадочных отверстий:
-        1. Детекция круглых посадочных лунок (Hough Circles + контурный анализ).
-        2. Оценка прямоугольного контура лотка (Tray Envelope).
-        3. Если отверстия обнаружены - точная подгонка сетки ROI под центры крайних ячеек.
-        4. Если отверстия частично закрыты пологом - поиск кластера биомассы.
+        Интеллектуальное автообнаружение лотка и желтых пробок минеральной ваты (22 мм):
+        1. Спектральная детекция желтого волокнистого субстрата минваты (Rockwool CV).
+        2. Поиск центров пробок через контурный анализ и Hough Circles.
+        3. Оценка геометрического охвата (ROI) по найденным пробкам или контуру лотка.
         :param frame_bgr: Кадр с камеры
         :return: Словарь с результатами детекции и новым ROI
         """
@@ -212,18 +215,40 @@ class GridCellTracker:
             return {"status": "error", "message": "Пустой кадр", "roi": list(self.roi_norm)}
 
         h, w = frame_bgr.shape[:2]
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
         
-        # 1. Адаптивное улучшение контраста (CLAHE)
+        # 1. Специфическая маска желтой минеральной ваты (Rockwool plug detection)
+        # Желтый/соломенный/песочный оттенок субстрата: H 18..46, S 25..200, V 70..255
+        lower_wool = np.array([16, 25, 60], dtype=np.uint8)
+        upper_wool = np.array([48, 220, 255], dtype=np.uint8)
+        raw_wool_mask = cv2.inRange(hsv, lower_wool, upper_wool)
+        
+        # Морфологическая очистка волокнистой текстуры ваты
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        wool_clean = cv2.morphologyEx(raw_wool_mask, cv2.MORPH_CLOSE, kernel)
+        wool_clean = cv2.morphologyEx(wool_clean, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+
+        # 2. Поиск круглых/цилиндрических пробок минваты по контурам
+        detected_plugs = []
+        min_rad = max(8, int(min(w, h) * 0.02))
+        max_rad = max(min_rad + 8, int(min(w, h) * 0.16))
+        min_dist = max(16, int(min(w, h) * 0.06))
+
+        contours, _ = cv2.findContours(wool_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area > (math.pi * min_rad * min_rad * 0.4):
+                (cx, cy), rad = cv2.minEnclosingCircle(cnt)
+                cx, cy, rad = int(cx), int(cy), int(rad)
+                if min_rad <= rad <= max_rad:
+                    if 0.03 * w < cx < 0.97 * w and 0.03 * h < cy < 0.97 * h:
+                        detected_plugs.append((cx, cy, rad))
+
+        # 3. Дополнительный поиск Hough Circles по маске минваты и по серому кадру
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray)
         blurred = cv2.GaussianBlur(enhanced, (9, 9), 2.0)
-
-        # 2. Поиск круглых посадочных отверстий через cv2.HoughCircles
-        # Ожидаемый радиус лунки в зависимости от разрешения кадра (обычно 10-40 px)
-        min_rad = max(8, int(min(w, h) * 0.02))
-        max_rad = max(min_rad + 5, int(min(w, h) * 0.09))
-        min_dist = max(15, int(min(w, h) * 0.06))
 
         circles = cv2.HoughCircles(
             blurred,
@@ -231,69 +256,49 @@ class GridCellTracker:
             dp=1.2,
             minDist=min_dist,
             param1=70,
-            param2=32,
+            param2=30,
             minRadius=min_rad,
             maxRadius=max_rad
         )
 
-        detected_centers = []
         if circles is not None:
             circles = np.uint16(np.around(circles))
             for c in circles[0, :]:
                 cx, cy, r = int(c[0]), int(c[1]), int(c[2])
-                # Фильтр по границам кадра
                 if 0.04 * w < cx < 0.96 * w and 0.04 * h < cy < 0.96 * h:
-                    detected_centers.append((cx, cy, r))
+                    # Проверяем, что в этой области есть желтая минвата или посадочное отверстие
+                    patch = wool_clean[max(0, cy-r):min(h, cy+r), max(0, cx-r):min(w, cx+r)]
+                    if patch.size > 0 and np.mean(patch) > 20:
+                        if not any(math.hypot(cx - dp[0], cy - dp[1]) < min_dist * 0.7 for dp in detected_plugs):
+                            detected_plugs.append((cx, cy, r))
 
-        # 3. Дополнительный поиск круглых контуров (на случай слабоконтрастных отверстий)
-        if len(detected_centers) < 6:
-            thresh = cv2.adaptiveThreshold(
-                blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 3
-            )
-            contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in contours:
-                area = cv2.contourArea(cnt)
-                if 150 < area < (w * h * 0.04):
-                    perimeter = cv2.arcLength(cnt, True)
-                    if perimeter > 0:
-                        circularity = 4 * math.pi * (area / (perimeter * perimeter))
-                        if circularity > 0.65:
-                            (cx, cy), rad = cv2.minEnclosingCircle(cnt)
-                            cx, cy, rad = int(cx), int(cy), int(rad)
-                            if min_rad <= rad <= max_rad:
-                                if 0.04 * w < cx < 0.96 * w and 0.04 * h < cy < 0.96 * h:
-                                    # Проверяем отсутствие дубликатов
-                                    if not any(math.hypot(cx - oc[0], cy - oc[1]) < min_dist * 0.7 for oc in detected_centers):
-                                        detected_centers.append((cx, cy, rad))
-
-        # 4. Анализ найденных отверстий
-        detected_count = len(detected_centers)
+        detected_count = len(detected_plugs)
         new_roi = list(self.roi_norm)
         confidence = 50.0
         method = "default"
 
-        if detected_count >= 4:
-            # Найдено достаточное количество отверстий: строим охватывающий прямоугольник с отступом
-            xs = [c[0] for c in detected_centers]
-            ys = [c[1] for c in detected_centers]
-            avg_r = float(np.mean([c[2] for c in detected_centers]))
+        if detected_count >= 2:
+            # Найдена группа желтых пробок минваты: строим охватывающий прямоугольник с отступом
+            xs = [p[0] for p in detected_plugs]
+            ys = [p[1] for p in detected_plugs]
+            avg_r = float(np.mean([p[2] for p in detected_plugs]))
 
-            min_x = max(0, min(xs) - int(avg_r * 1.5))
-            max_x = min(w, max(xs) + int(avg_r * 1.5))
-            min_y = max(0, min(ys) - int(avg_r * 1.5))
-            max_y = min(h, max(ys) + int(avg_r * 1.5))
+            # Отступ в размере радиуса пробки
+            min_x = max(0, min(xs) - int(avg_r * 1.6))
+            max_x = min(w, max(xs) + int(avg_r * 1.6))
+            min_y = max(0, min(ys) - int(avg_r * 1.6))
+            max_y = min(h, max(ys) + int(avg_r * 1.6))
 
             new_ymin = round(min_y / float(h), 3)
             new_xmin = round(min_x / float(w), 3)
             new_ymax = round(max_y / float(h), 3)
             new_xmax = round(max_x / float(w), 3)
 
-            # Проверка разумности пропорций
-            if 0.15 < (new_xmax - new_xmin) < 0.95 and 0.15 < (new_ymax - new_ymin) < 0.95:
+            if 0.10 < (new_xmax - new_xmin) < 0.98 and 0.10 < (new_ymax - new_ymin) < 0.98:
                 self.set_roi(new_ymin, new_xmin, new_ymax, new_xmax)
                 new_roi = list(self.roi_norm)
-                confidence = min(98.0, 60.0 + detected_count * 1.6)
-                method = "holes_envelope"
+                confidence = min(99.0, 65.0 + detected_count * 2.5)
+                method = "yellow_rockwool_plugs"
 
         else:
             # Попытка детекции внешнего прямоугольного контура лотка
@@ -304,7 +309,7 @@ class GridCellTracker:
 
             for cnt in tray_contours:
                 area = cv2.contourArea(cnt)
-                if area > (w * h * 0.20):  # Лоток занимает не менее 20% кадра
+                if area > (w * h * 0.15):
                     x, y, tw, th = cv2.boundingRect(cnt)
                     if area > max_area:
                         max_area = area
@@ -312,7 +317,6 @@ class GridCellTracker:
 
             if best_rect:
                 x, y, tw, th = best_rect
-                # Небольшой внутренний отступ для рабочей зоны ячеек
                 pad_x = int(tw * 0.05)
                 pad_y = int(th * 0.05)
                 new_ymin = round(max(0, y + pad_y) / float(h), 3)
@@ -321,7 +325,7 @@ class GridCellTracker:
                 new_xmax = round(min(w, x + tw - pad_x) / float(w), 3)
                 self.set_roi(new_ymin, new_xmin, new_ymax, new_xmax)
                 new_roi = list(self.roi_norm)
-                confidence = 82.0
+                confidence = 80.0
                 method = "tray_outer_contour"
 
         # Сохраняем обновленные координаты
@@ -331,12 +335,13 @@ class GridCellTracker:
             "status": "ok",
             "method": method,
             "detected_holes": detected_count,
+            "detected_rockwool": detected_count,
             "confidence": round(confidence, 1),
             "roi": new_roi,
             "rows": self.rows,
             "cols": self.cols,
             "cell_radius_ratio": self.cell_radius_ratio,
-            "message": f"Обнаружено {detected_count} посадочных лунок. Метод: {method}. ROI откалиброван."
+            "message": f"Распознано {detected_count} пробок минваты (22 мм). Метод: {method}. ROI обновлен."
         }
 
     def _generate_grid_geometry(self, frame_w: int, frame_h: int) -> List[Dict[str, Any]]:
@@ -393,47 +398,65 @@ class GridCellTracker:
         foliage_mask: Optional[np.ndarray] = None
     ) -> List[CellMetrics]:
         """
-        Комплексный анализ всех ячеек на кадре с учетом ручных переопределений.
+        Комплексный спектральный анализ всех ячеек на кадре:
+        - Четкое разделение желтой минеральной ваты (субстрат) от хлороза листвы.
+        - Расчет покрытия пологом (Biomass), хлороза (Chlorosis), плесени (Mold).
+        - Учет ручных переопределений и калибровок.
         """
         h, w = frame_bgr.shape[:2]
         now = time.time()
 
-        # 1. Быстрый расчет спектральных масок, если они не переданы
+        # 1. Расчет индекса Excess Green (ExG = 2G - R - B)
+        b = frame_bgr[:, :, 0].astype(np.float32)
+        g = frame_bgr[:, :, 1].astype(np.float32)
+        r = frame_bgr[:, :, 2].astype(np.float32)
+        exg_raw = 2.0 * g - r - b
         if exg_img is None:
-            b = frame_bgr[:, :, 0].astype(np.float32)
-            g = frame_bgr[:, :, 1].astype(np.float32)
-            r = frame_bgr[:, :, 2].astype(np.float32)
-            exg_raw = 2.0 * g - r - b
             exg_img = np.clip(exg_raw, 0, 255).astype(np.uint8)
 
         hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
 
-        # Зеленая активная листва
-        lower_green = np.array([25, 25, 25], dtype=np.uint8)
-        upper_green = np.array([95, 255, 255], dtype=np.uint8)
+        # 2. СПЕКТРАЛЬНЫЕ МАСКИ:
+        # А. Желтая минеральная вата (22мм пробки Rockwool):
+        # Оттенок H 16..46, умеренная насыщенность S 20..190, яркость V 65..255.
+        # ВАЖНО: у сухой/влажной минваты exg_raw < 22 (нет активного хлорофилла!).
+        lower_wool = np.array([16, 20, 65], dtype=np.uint8)
+        upper_wool = np.array([46, 200, 255], dtype=np.uint8)
+        wool_hsv = cv2.inRange(hsv, lower_wool, upper_wool)
+        rockwool_mask = np.where((wool_hsv > 0) & (exg_raw < 24), 255, 0).astype(np.uint8)
+
+        # Б. Зеленая активная листва (Хлорофилл):
+        # Зеленые оттенки H 32..90, высокая доминанта зеленого exg_img >= 20
+        lower_green = np.array([30, 30, 30], dtype=np.uint8)
+        upper_green = np.array([92, 255, 255], dtype=np.uint8)
         green_mask = cv2.inRange(hsv, lower_green, upper_green)
-        green_active = np.where((exg_img > 15) & (green_mask > 0), 255, 0).astype(np.uint8)
+        green_active = np.where((green_mask > 0) & (exg_raw >= 20), 255, 0).astype(np.uint8)
 
-        # Хлороз (желтоватые оттенки)
-        lower_yellow = np.array([16, 25, 50], dtype=np.uint8)
-        upper_yellow = np.array([35, 255, 255], dtype=np.uint8)
-        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-        chlorosis_mask = np.where((yellow_mask > 0) & (exg_img > 0), 255, 0).astype(np.uint8)
+        # В. Хлороз (Патологическое пожелтение листовой пластины):
+        # В отличие от минваты, хлороз проявляется на реальных листьях, где есть листовой полог (exg_raw >= 25 и S > 55)
+        lower_yellow = np.array([18, 55, 70], dtype=np.uint8)
+        upper_yellow = np.array([32, 255, 255], dtype=np.uint8)
+        yellow_leaf_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        chlorosis_mask = np.where((yellow_leaf_mask > 0) & (exg_raw >= 25) & (rockwool_mask == 0), 255, 0).astype(np.uint8)
 
-        # Листва (зелень + хлороз)
+        # Г. Суммарная растительная биомасса (зелень + хлороз листвы, БЕЗ МИНВАТЫ!)
         if foliage_mask is None:
             foliage_mask = cv2.bitwise_or(green_active, chlorosis_mask)
+            # Исключаем пиксели минеральной ваты из биомассы
+            foliage_mask = np.where((foliage_mask > 0) & (rockwool_mask == 0), 255, 0).astype(np.uint8)
 
-        # Некроз (темно-коричневые/черные пятна)
+        # Д. Некроз (темно-коричневые / черные пятна отмирания ткани)
         lower_necrosis = np.array([5, 40, 20], dtype=np.uint8)
-        upper_necrosis = np.array([25, 255, 90], dtype=np.uint8)
+        upper_necrosis = np.array([24, 255, 85], dtype=np.uint8)
         necrosis_mask = cv2.inRange(hsv, lower_necrosis, upper_necrosis)
+        necrosis_mask = np.where((necrosis_mask > 0) & (rockwool_mask == 0), 255, 0).astype(np.uint8)
 
-        # Мицелий серой гнили (Botrytis / плесень)
+        # Е. Мицелий серой гнили (Botrytis / плесень: серо-белый налет, низкая насыщенность S < 35, V 110..220)
         lower_mold = np.array([0, 0, 110], dtype=np.uint8)
-        upper_mold = np.array([180, 45, 210], dtype=np.uint8)
+        upper_mold = np.array([180, 35, 215], dtype=np.uint8)
         mold_candidate = cv2.inRange(hsv, lower_mold, upper_mold)
-        mold_mask = np.where((mold_candidate > 0) & (exg_img < 15), 255, 0).astype(np.uint8)
+        # Исключаем чистую минвату и активную зелень
+        mold_mask = np.where((mold_candidate > 0) & (exg_img < 15) & (rockwool_mask == 0), 255, 0).astype(np.uint8)
 
         grid_geo = self._generate_grid_geometry(w, h)
         results: List[CellMetrics] = []
@@ -458,42 +481,52 @@ class GridCellTracker:
             chl_px = int(np.count_nonzero((chlorosis_mask > 0) & (cell_circle_mask > 0)))
             nec_px = int(np.count_nonzero((necrosis_mask > 0) & (cell_circle_mask > 0)))
             mld_px = int(np.count_nonzero((mold_mask > 0) & (cell_circle_mask > 0)))
+            wool_px = int(np.count_nonzero((rockwool_mask > 0) & (cell_circle_mask > 0)))
 
             coverage = round(foliage_px / float(total_px), 3)
             chl_ratio = round(chl_px / float(max(1, foliage_px)), 3)
             nec_ratio = round(nec_px / float(max(1, foliage_px)), 3)
             mld_ratio = round(mld_px / float(total_px), 3)
+            wool_ratio = round(wool_px / float(total_px), 3)
 
             # Средний ExG внутри ячейки
             cell_exg_vals = exg_img[cell_circle_mask > 0]
             mean_exg = float(np.mean(cell_exg_vals)) if len(cell_exg_vals) > 0 else 0.0
 
-            # Определение стадии и здоровья ячейки
+            # 3. Определение стадии и здоровья ячейки
             stage = "EMPTY"
             status = "EMPTY"
             diag_ru = "Свободно"
             diag_en = "Empty"
             health_idx = 100.0
 
-            if coverage < 0.04:
+            if coverage < 0.04 and wool_ratio >= 0.18:
+                # В ячейке установлена желтая минеральная вата, семена еще не взошли
+                stage = "ROCKWOOL"
+                status = "ROCKWOOL"
+                diag_ru = "Минвата 22мм (Готово к посеву)"
+                diag_en = "22mm Rockwool Plug (Ready)"
+                health_idx = 100.0
+            elif coverage < 0.04:
+                # Пустое гнездо лотка
                 stage = "EMPTY"
                 status = "EMPTY"
-                diag_ru = "Свободно (нет всходов)"
-                diag_en = "Empty / No Sprouts"
+                diag_ru = "Пустая ячейка"
+                diag_en = "Empty Cell"
                 health_idx = 100.0
-            elif mld_ratio >= 0.06:
+            elif mld_ratio >= 0.08:
                 stage = "MOLD"
                 status = "CRITICAL"
                 diag_ru = "Плесень (Серая гниль)"
                 diag_en = "Gray Mold (Botrytis)"
                 health_idx = max(5.0, 30.0 - mld_ratio * 100.0)
-            elif nec_ratio >= 0.15 and coverage > 0.08:
+            elif nec_ratio >= 0.18 and coverage > 0.08:
                 stage = "DAMPING_OFF"
                 status = "CRITICAL"
                 diag_ru = "Полегание (Черная ножка)"
                 diag_en = "Damping-Off (Pythium)"
                 health_idx = max(10.0, 40.0 - nec_ratio * 100.0)
-            elif chl_ratio >= 0.20:
+            elif chl_ratio >= 0.25:
                 stage = "CHLOROSIS"
                 status = "WARNING"
                 diag_ru = "Хлороз (дефицит Fe/N)"
@@ -504,7 +537,7 @@ class GridCellTracker:
                 status = "HEALTHY"
                 diag_ru = "Прорастание (Всходы)"
                 diag_en = "Germination (Radicle)"
-                health_idx = 95.0
+                health_idx = 96.0
             elif coverage < 0.45:
                 stage = "SPROUT"
                 status = "HEALTHY"
@@ -540,6 +573,9 @@ class GridCellTracker:
                         diag_ru = f"Вручную: Требует внимания ({crop_name})"
                     elif st_ov == "CRITICAL":
                         diag_ru = f"Вручную: Критично ({crop_name})"
+                    elif st_ov == "ROCKWOOL":
+                        diag_ru = "Вручную: Минвата 22мм"
+                        stage = "ROCKWOOL"
                     elif st_ov == "EMPTY":
                         diag_ru = "Вручную: Пустая ячейка"
                         stage = "EMPTY"
@@ -559,10 +595,12 @@ class GridCellTracker:
                 chlorosis_pixels=chl_px,
                 necrosis_pixels=nec_px,
                 mold_pixels=mld_px,
+                rockwool_pixels=wool_px,
                 coverage_ratio=coverage,
                 chlorosis_ratio=chl_ratio,
                 necrosis_ratio=nec_ratio,
                 mold_ratio=mld_ratio,
+                rockwool_ratio=wool_ratio,
                 mean_exg=round(mean_exg, 1),
                 health_index=round(health_idx, 1),
                 stage=stage,
@@ -587,17 +625,19 @@ class GridCellTracker:
 
         total = len(metrics)
         empty = sum(1 for m in metrics if m.status == "EMPTY")
+        rockwool = sum(1 for m in metrics if m.status == "ROCKWOOL")
         healthy = sum(1 for m in metrics if m.status == "HEALTHY")
         warning = sum(1 for m in metrics if m.status == "WARNING")
         critical = sum(1 for m in metrics if m.status == "CRITICAL")
-        active = total - empty
+        active = healthy + warning + critical
 
         avg_cov = float(np.mean([m.coverage_ratio for m in metrics])) if metrics else 0.0
-        avg_health = float(np.mean([m.health_index for m in metrics if m.status != "EMPTY"])) if active > 0 else 100.0
+        avg_health = float(np.mean([m.health_index for m in metrics if m.status in ("HEALTHY", "WARNING", "CRITICAL")])) if active > 0 else 100.0
 
         return {
             "total_cells": total,
             "active_cells": active,
+            "rockwool_cells": rockwool,
             "empty_cells": empty,
             "healthy_cells": healthy,
             "warning_cells": warning,
@@ -618,7 +658,8 @@ class GridCellTracker:
         show_summary: bool = True
     ) -> np.ndarray:
         """
-        Отрисовка технологичного киберпанк HUD-оверлея на кадре.
+        Отрисовка технологичного киберпанк HUD-оверлея на кадре:
+        - Дифференциация: Минвата (желтый янтарь), Здорово (изумруд), Хлороз (оранжевый), Болезнь (алый), Пусто (серый).
         """
         if metrics is None:
             metrics = self.last_metrics
@@ -628,8 +669,9 @@ class GridCellTracker:
 
         color_map = {
             "HEALTHY": (185, 245, 0),      # Неоновый изумрудно-зеленый
-            "WARNING": (50, 180, 255),     # Янтарно-оранжевый
-            "CRITICAL": (80, 60, 255),     # Ярко-алый
+            "ROCKWOOL": (50, 220, 245),     # Золотисто-желтый цвет минваты (Rockwool Amber)
+            "WARNING": (30, 150, 255),     # Насыщенный янтарно-оранжевый (Хлороз)
+            "CRITICAL": (80, 60, 255),     # Ярко-алый (Плесень / Черная ножка)
             "EMPTY": (110, 100, 90)        # Приглушенный серо-синий
         }
 
@@ -644,32 +686,37 @@ class GridCellTracker:
             cx, cy, r = m.center_x, m.center_y, m.radius
 
             # 1. Основное кольцо ячейки
-            thickness = 2 if m.status in ("HEALTHY", "WARNING", "CRITICAL") else 1
+            thickness = 2 if m.status in ("HEALTHY", "ROCKWOOL", "WARNING", "CRITICAL") else 1
             cv2.circle(output, (cx, cy), r, color, thickness, cv2.LINE_AA)
 
             # 2. Неоновое пульсирующее внешнее кольцо для предупреждений
             if m.status in ("WARNING", "CRITICAL"):
                 cv2.circle(output, (cx, cy), r + 4, color, 1, cv2.LINE_AA)
+            elif m.status == "ROCKWOOL":
+                # Тонкий внутренний маркер для посадочной пробки 22 мм
+                cv2.circle(output, (cx, cy), max(3, r - 5), color, 1, cv2.LINE_AA)
 
-            # 3. Плашка с номером ячейки и процентом
+            # 3. Плашка с номером ячейки и процентом/статусом
             tag_text = f"{m.cell_id}"
-            if m.status != "EMPTY":
+            if m.status == "ROCKWOOL":
+                tag_text += ": ВАТА"
+            elif m.status != "EMPTY":
                 tag_text += f": {int(m.coverage_ratio * 100)}%"
 
-            (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_SIMPLEX, 0.36, 1)
+            (tw, th), _ = cv2.getTextSize(tag_text, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)
             tx = cx - tw // 2
             ty = cy + 4
 
             cv2.rectangle(output, (tx - 3, ty - th - 3), (tx + tw + 3, ty + 3), (12, 16, 22), -1)
             cv2.rectangle(output, (tx - 3, ty - th - 3), (tx + tw + 3, ty + 3), color, 1)
-            cv2.putText(output, tag_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (250, 250, 250), 1, cv2.LINE_AA)
+            cv2.putText(output, tag_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (250, 250, 250), 1, cv2.LINE_AA)
 
             # Маркер тревоги под ячейкой
             if m.status == "CRITICAL":
                 alert_lbl = "! MOLD !" if m.stage == "MOLD" else "! SICK !"
                 cv2.putText(output, alert_lbl, (cx - 20, cy + r + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (60, 60, 255), 1, cv2.LINE_AA)
             elif m.status == "WARNING":
-                cv2.putText(output, "CHL", (cx - 10, cy + r + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (50, 180, 255), 1, cv2.LINE_AA)
+                cv2.putText(output, "CHL", (cx - 10, cy + r + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (30, 150, 255), 1, cv2.LINE_AA)
 
         # 4. Общая статусная строка сверху кадра
         if show_summary:
@@ -685,11 +732,11 @@ class GridCellTracker:
             cv2.putText(output, title_str, (14, 18), cv2.FONT_HERSHEY_DUPLEX, 0.46, (0, 245, 185), 1, cv2.LINE_AA)
 
             stat_str = (
-                f"Active: {summary['active_cells']}/{summary['total_cells']} | "
-                f"Healthy: {summary['healthy_cells']} | "
-                f"Warn: {summary['warning_cells']} | "
-                f"Crit: {summary['critical_cells']} | "
-                f"Canopy: {summary['avg_coverage_percent']}%"
+                f"Ростки: {summary['active_cells']} | "
+                f"Минвата: {summary.get('rockwool_cells', 0)} | "
+                f"Здорово: {summary['healthy_cells']} | "
+                f"Внимание: {summary['warning_cells']} | "
+                f"Полог: {summary['avg_coverage_percent']}%"
             )
             cv2.putText(output, stat_str, (14, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 230, 240), 1, cv2.LINE_AA)
 
@@ -712,6 +759,7 @@ class GridCellTracker:
                 "chlorosis": round(m.chlorosis_ratio * 100.0, 1),
                 "necrosis": round(m.necrosis_ratio * 100.0, 1),
                 "mold": round(m.mold_ratio * 100.0, 1),
+                "rockwool": round(m.rockwool_ratio * 100.0, 1),
                 "exg": m.mean_exg,
                 "health": m.health_index,
                 "stage": m.stage,

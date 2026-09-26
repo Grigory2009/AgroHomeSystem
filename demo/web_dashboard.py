@@ -1921,8 +1921,9 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         </div>
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:0.75rem; color:var(--text-muted); flex-wrap:wrap; gap:4px;">
-          <div id="cells-quick-stats">Активно: -- | Здорово: -- | Внимание: --</div>
-          <div style="display:flex; gap:8px; font-size: 0.72rem;">
+          <div id="cells-quick-stats">Активно: -- | Минвата: -- | Здорово: -- | Внимание: --</div>
+          <div style="display:flex; gap:8px; font-size: 0.72rem; flex-wrap:wrap;">
+            <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#facc15;"></span> Минвата 22мм</span>
             <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Здорово</span>
             <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#f59e0b;"></span> Хлороз</span>
             <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#ef4444;"></span> Плесень</span>
@@ -1973,8 +1974,9 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <label style="display:block; font-size:0.7rem; color:var(--text-dim); margin-bottom:3px;">Статус / Состояние:</label>
                 <select id="ins-select-status" class="input-cyber">
                   <option value="AUTO">🤖 Авто-AI (Детекция нейросетью)</option>
+                  <option value="ROCKWOOL">🟡 Минвата 22мм (Готово к посеву)</option>
                   <option value="HEALTHY">🟢 Здорово (Норма)</option>
-                  <option value="WARNING">🟡 Внимание (Хлороз / дефицит)</option>
+                  <option value="WARNING">🟠 Внимание (Хлороз / дефицит)</option>
                   <option value="CRITICAL">🔴 Критично (Плесень / гниль)</option>
                   <option value="EMPTY">⚪ Пустая ячейка / свободна</option>
                 </select>
@@ -2487,7 +2489,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         if (badge) badge.innerText = `${summary.active_cells || 0}/${summary.total_cells || 24} Ячеек`;
         const qStats = document.getElementById('cells-quick-stats');
         if (qStats) {
-          qStats.innerText = `Здорово: ${summary.healthy_cells || 0} | Внимание: ${summary.warning_cells || 0} | Критично: ${summary.critical_cells || 0} | Полог: ${summary.avg_coverage_percent || 0}%`;
+          qStats.innerText = `Ростки: ${summary.active_cells || 0} | Минвата: ${summary.rockwool_cells || 0} | Здорово: ${summary.healthy_cells || 0} | Внимание: ${summary.warning_cells || 0} | Полог: ${summary.avg_coverage_percent || 0}%`;
         }
         const titleEl = document.getElementById('txt-matrix-title');
         if (titleEl && summary.layout) {
@@ -2499,12 +2501,26 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       cells.forEach(c => {
         let color = '#10b981';
         let barColor = '#10b981';
-        if (c.status === 'EMPTY') { color = '#64748b'; barColor = '#64748b'; }
-        else if (c.status === 'WARNING') { color = '#f59e0b'; barColor = '#f59e0b'; }
-        else if (c.status === 'CRITICAL') { color = '#ef4444'; barColor = '#ef4444'; }
+        let valText = `${Math.round(c.coverage)}%`;
+
+        if (c.status === 'ROCKWOOL') {
+          color = '#facc15';
+          barColor = '#facc15';
+          valText = 'ВАТА';
+        } else if (c.status === 'EMPTY') {
+          color = '#64748b';
+          barColor = '#64748b';
+          valText = 'ПУСТО';
+        } else if (c.status === 'WARNING') {
+          color = '#f59e0b';
+          barColor = '#f59e0b';
+        } else if (c.status === 'CRITICAL') {
+          color = '#ef4444';
+          barColor = '#ef4444';
+        }
 
         const isSel = (c.id === selectedCellId) ? 'selected' : '';
-        const covVal = Math.round(c.coverage);
+        const covVal = (c.status === 'ROCKWOOL') ? Math.max(20, Math.round(c.rockwool || 60)) : Math.round(c.coverage);
         const cropBadge = (c.crop_name && c.crop_name !== 'Микрозелень') ? `<span style="font-size:0.6rem; color:var(--accent-cyan); display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${c.crop_name}</span>` : '';
         const overrideDot = c.is_manual_override ? `<span title="Ручной режим" style="color:var(--accent-cyan); font-size:0.65rem;">⚙️</span>` : '';
 
@@ -2518,7 +2534,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             <div class="cell-cov-bar-bg">
               <div class="cell-cov-bar-fill" style="width:${covVal}%; background:${barColor};"></div>
             </div>
-            <div class="cell-tile-val">${covVal}%</div>
+            <div class="cell-tile-val">${valText}</div>
           </div>
         `;
       });
@@ -2546,15 +2562,28 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('ins-cell-title').innerText = `Ячейка ${c.id} (Ряд ${c.row+1}, Колонка ${c.col+1})`;
       
       const badge = document.getElementById('ins-cell-badge');
-      badge.innerText = c.status;
-      if (c.status === 'HEALTHY') {
+      badge.style.background = '';
+      badge.style.color = '';
+      badge.style.borderColor = '';
+
+      if (c.status === 'ROCKWOOL') {
+        badge.className = 'badge';
+        badge.style.background = 'rgba(250, 204, 21, 0.18)';
+        badge.style.color = '#facc15';
+        badge.style.border = '1px solid rgba(250, 204, 21, 0.4)';
+        badge.innerText = 'МИНВАТА 22мм';
+      } else if (c.status === 'HEALTHY') {
         badge.className = 'badge badge-healthy';
+        badge.innerText = 'ЗДОРОВО';
       } else if (c.status === 'WARNING') {
         badge.className = 'badge badge-warning';
+        badge.innerText = 'ВНИМАНИЕ';
       } else if (c.status === 'CRITICAL') {
         badge.className = 'badge badge-danger';
+        badge.innerText = 'КРИТИЧНО';
       } else {
         badge.className = 'badge';
+        badge.innerText = 'ПУСТО';
       }
 
       const ovBadge = document.getElementById('ins-cell-override-badge');
@@ -2566,7 +2595,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       document.getElementById('ins-chl').innerText = `${Math.round(c.chlorosis)}%`;
       document.getElementById('ins-mld').innerText = `${Math.round(c.mold)}%`;
       document.getElementById('ins-hlth').innerText = `${Math.round(c.health)}%`;
-      document.getElementById('ins-cell-diag').innerText = `Диагноз: ${c.diag_ru || c.status}. Средний ExG: ${c.exg || 0}.`;
+      document.getElementById('ins-cell-diag').innerText = `Диагноз: ${c.diag_ru || c.status}. (Минвата: ${Math.round(c.rockwool || 0)}%, ExG: ${c.exg || 0})`;
 
       // Заполнение формы ручного редактирования
       const inCrop = document.getElementById('ins-input-crop');
