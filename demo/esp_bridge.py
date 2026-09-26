@@ -13,6 +13,7 @@ AgroHomeSystem - ESP32-S3 <-> Raspberry Pi Bridge
    в реальном времени для логирования и адаптивного анализа.
 """
 
+import os
 import sys
 import time
 import json
