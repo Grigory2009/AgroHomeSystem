@@ -26,12 +26,14 @@ compile_commands.json
 # Kompas / CAD temp files
 ~$*.m3~
 ~$*
+*.bak
 
 # Temporary / Scratch
 scratch/
 benchmark_results.json
 demo/rpi_throttling_report.json
 demo/dataset_watercress/
+demo/snapshots/
 
 # OS / IDE
 .DS_Store

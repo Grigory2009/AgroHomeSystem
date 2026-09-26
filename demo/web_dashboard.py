@@ -47,6 +47,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from plant_health_engine import PlantHealthDetector, DiagnosisResult, AGRONOMIC_KNOWLEDGE_BASE, CROP_PRESETS
 from esp_bridge import EspBridge, determine_growth_stage, get_rpi_cpu_temperature
+from cell_tracker import GridCellTracker, CellMetrics
 
 
 # ==============================================================================
@@ -79,7 +80,12 @@ class SystemHub:
         self.active_preset = "watercress"  # Пресет по умолчанию (Тестовый пресет для микрозелени)
         self.growth_percent = 35.0
         self.crop_name = "Кресс-салат"
-        self.view_mode = "rgb"  # rgb, exg, split
+        self.view_mode = "rgb"  # rgb, exg, split, grid
+
+        # Поячеечный трекер для переработанного корпуса v2 (24 ячейки: 4x6)
+        self.cell_tracker = GridCellTracker(rows=6, cols=4)
+        self.cell_metrics: List[CellMetrics] = []
+        self.cell_summary: Dict[str, Any] = self.cell_tracker.get_summary([])
 
         # Последний результат диагностики
         self.last_diagnosis = {
@@ -271,6 +277,13 @@ class SystemHub:
             except Exception as e:
                 pass
 
+        elif mode == "grid" and self.cell_tracker:
+            try:
+                # Отрисовка 24-ячеечной матрицы лотка v2 (HUD кольца, покрытие, статусы)
+                return self.cell_tracker.draw_hud(frame, self.cell_metrics)
+            except Exception as e:
+                pass
+
         # Режим RGB с HUD оверлеем
         out = frame.copy()
 
@@ -352,6 +365,17 @@ class SystemHub:
                             "fps": round(1000.0 / max(1.0, infer_time), 1),
                             "timestamp": time.time()
                         })
+
+                    # Поячеечный анализ сетки посадочного лотка (24 ячейки: 4x6)
+                    if self.cell_tracker:
+                        try:
+                            c_metrics = self.cell_tracker.analyze(frame_to_diagnose)
+                            c_summary = self.cell_tracker.get_summary(c_metrics)
+                            with self.lock:
+                                self.cell_metrics = c_metrics
+                                self.cell_summary = c_summary
+                        except Exception:
+                            pass
 
                     # Автоматическая синхронизация с дисплеем ESP32
                     self.sync_with_esp32()
@@ -500,6 +524,8 @@ class SystemHub:
                     }
                     for p in CROP_PRESETS.values()
                 ],
+                "cells_summary": self.cell_summary if hasattr(self, "cell_summary") else {},
+                "cells": [asdict(m) for m in self.cell_metrics] if hasattr(self, "cell_metrics") else [],
                 "logs": list(self.logs[-15:])
             }
         return state
@@ -600,6 +626,16 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
                 self._send_json({"logs": []})
             return
 
+        # 5. REST API: Поячеечные данные матрицы 24 ячеек (v2 лоток 4x6)
+        elif path == "/api/cells":
+            if hub and hub.cell_tracker:
+                with hub.lock:
+                    data = hub.cell_tracker.to_json_dict(hub.cell_metrics)
+                self._send_json(data)
+            else:
+                self._send_json({"summary": {}, "cells": []})
+            return
+
         else:
             self.send_response(404)
             self.end_headers()
@@ -698,6 +734,19 @@ class DashboardHttpHandler(BaseHTTPRequestHandler):
                 })
             else:
                 self._send_json({"error": "no hub"}, 500)
+
+        # 8. Калибровка рабочей зоны матрицы 24 ячеек
+        elif path == "/api/cells/calibrate":
+            if hub and hub.cell_tracker:
+                ymin = float(post_data.get("ymin", 0.06))
+                xmin = float(post_data.get("xmin", 0.08))
+                ymax = float(post_data.get("ymax", 0.94))
+                xmax = float(post_data.get("xmax", 0.92))
+                hub.cell_tracker.set_roi(ymin, xmin, ymax, xmax)
+                hub.log(f"Калибровка сетки ячеек: ROI=({ymin:.2f}, {xmin:.2f}, {ymax:.2f}, {xmax:.2f})", "success")
+                self._send_json({"status": "ok", "roi": [ymin, xmin, ymax, xmax]})
+            else:
+                self._send_json({"error": "no tracker"}, 500)
 
         else:
             self.send_response(404)
@@ -1398,6 +1447,127 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       transform: translateY(0);
       opacity: 1;
     }
+
+    /* 24-CELL MATRIX (V2 TRAY) */
+    .cells-grid-matrix {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .cell-tile {
+      background: rgba(18, 25, 36, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 8px;
+      padding: 6px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      position: relative;
+    }
+
+    .cell-tile:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent-green);
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.15);
+    }
+
+    .cell-tile.selected {
+      border-color: var(--accent-green);
+      background: rgba(16, 185, 129, 0.12);
+    }
+
+    .cell-tile-id {
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .cell-tile-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .cell-cov-bar-bg {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
+      margin: 5px 0 3px 0;
+      overflow: hidden;
+    }
+
+    .cell-cov-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.3s ease;
+    }
+
+    .cell-tile-val {
+      font-size: 0.76rem;
+      font-weight: 700;
+      color: var(--text-main);
+    }
+
+    .cell-inspector-box {
+      margin-top: 10px;
+      background: rgba(14, 20, 30, 0.95);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    .stat-pill {
+      background: rgba(255, 255, 255, 0.03);
+      padding: 5px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      text-align: center;
+    }
+
+    .stat-pill .lbl {
+      display: block;
+      font-size: 0.62rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+
+    /* OTA MODAL */
+    .ota-modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .ota-modal-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+      animation: modalFadeIn 0.25s ease;
+    }
+
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
+    }
   </style>
 </head>
 <body>
@@ -1420,6 +1590,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
       <div class="status-pill">
         <span id="cpu-temp-text">CPU: --°C</span>
       </div>
+      <button class="btn-action" style="padding: 0.35rem 0.75rem; font-size: 0.78rem; background: rgba(0, 245, 185, 0.12); color: #00f5b9; border-color: rgba(0, 245, 185, 0.3);" onclick="openOtaModal()">⚡ OTA ESP32</button>
       <button class="btn-lang" onclick="toggleLanguage()" id="btn-lang">🇷🇺 RU</button>
     </div>
   </header>
@@ -1438,6 +1609,7 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           <button class="btn-tab active" onclick="setVideoMode('rgb')" id="btn-mode-rgb">RGB + HUD</button>
           <button class="btn-tab" onclick="setVideoMode('exg')" id="btn-mode-exg">ExG Маска</button>
           <button class="btn-tab" onclick="setVideoMode('split')" id="btn-mode-split">Split</button>
+          <button class="btn-tab" onclick="setVideoMode('grid')" id="btn-mode-grid">24 Ячейки</button>
         </div>
       </div>
 
@@ -1545,6 +1717,49 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
           <span class="stage-item current" onclick="setGrowthPreset(45)" id="st-2">🌿 Вегетация</span>
           <span class="stage-item" onclick="setGrowthPreset(72)" id="st-3">🌸 Цветение</span>
           <span class="stage-item" onclick="setGrowthPreset(95)" id="st-4">🍅 Зрелость</span>
+        </div>
+      </div>
+
+      <!-- 24-CELL MATRIX CARD (V2 TRAY) -->
+      <div class="card" style="margin-top: 1.25rem;">
+        <div class="card-header">
+          <div class="card-title">
+            <span class="icon">🌿</span>
+            <span id="txt-matrix-title">Поячеечная матрица лотка v2 (24 ячейки: 4×6)</span>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <span class="badge badge-healthy" id="cells-summary-badge">24 / 24 Ячеек</span>
+            <button class="btn-action" style="padding: 0.3rem 0.65rem; font-size: 0.75rem;" onclick="setVideoMode('grid')">🔍 HUD на видео</button>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; font-size:0.75rem; color:var(--text-muted);">
+          <div id="cells-quick-stats">Активно: -- | Здорово: -- | Внимание: --</div>
+          <div style="display:flex; gap:8px; font-size: 0.72rem;">
+            <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#10b981;"></span> Здорово</span>
+            <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#f59e0b;"></span> Хлороз</span>
+            <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#ef4444;"></span> Плесень</span>
+            <span style="display:inline-flex; align-items:center; gap:4px;"><span style="width:7px; height:7px; border-radius:50%; background:#64748b;"></span> Пусто</span>
+          </div>
+        </div>
+
+        <div id="cells-matrix-grid" class="cells-grid-matrix">
+           <!-- Динамическая сетка 24 ячеек (4 колонки x 6 рядов) -->
+        </div>
+
+        <!-- Панель детального осмотра выбранной ячейки -->
+        <div id="cell-inspector-panel" class="cell-inspector-box" style="display:none;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <strong style="color:var(--accent-green); font-size:0.88rem;" id="ins-cell-title">Ячейка A1</strong>
+            <span class="badge" id="ins-cell-badge">ЗДОРОВО</span>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px; font-size:0.75rem; margin-bottom:8px;">
+            <div class="stat-pill"><span class="lbl">Покрытие</span><strong id="ins-cov">--%</strong></div>
+            <div class="stat-pill"><span class="lbl">Хлороз</span><strong id="ins-chl">--%</strong></div>
+            <div class="stat-pill"><span class="lbl">Плесень</span><strong id="ins-mld">--%</strong></div>
+            <div class="stat-pill"><span class="lbl">Здоровье</span><strong id="ins-hlth">--%</strong></div>
+          </div>
+          <div style="font-size:0.75rem; color:var(--text-muted); font-style:italic;" id="ins-cell-diag">Диагноз: Ожидание данных...</div>
         </div>
       </div>
     </div>
@@ -1670,6 +1885,41 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
   <div class="pet-toast" id="pet-toast">
     <span>🌿</span>
     <span id="pet-toast-msg">Растение благодарно за заботу! +2% к здоровью</span>
+  </div>
+
+  <!-- OTA FLASH MODAL -->
+  <div id="ota-modal" class="ota-modal-overlay" style="display:none;" onclick="if(event.target===this)closeOtaModal()">
+    <div class="ota-modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 style="margin:0; font-size:1.1rem; color:var(--accent-green); display:flex; align-items:center; gap:8px;">
+          <span>⚡</span> Беспроводная прошивка ESP32-S3 (OTA)
+        </h3>
+        <button style="background:transparent; border:none; color:var(--text-muted); font-size:1.2rem; cursor:pointer;" onclick="closeOtaModal()">✕</button>
+      </div>
+      <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:16px;">
+        Загрузка свежего бинарного файла прошивки (<code style="color:var(--accent-cyan)">firmware.bin</code>) в микроконтроллер ESP32-S3 по воздуху (Wi-Fi) без подключения USB-кабеля.
+      </p>
+      <div style="background:rgba(255,255,255,0.03); border:1px solid var(--border-subtle); border-radius:10px; padding:12px; margin-bottom:16px; font-size:0.82rem;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+          <span style="color:var(--text-dim)">Адрес ESP32:</span>
+          <strong id="ota-esp-ip" style="color:var(--text-main)">http://192.168.x.x</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+          <span style="color:var(--text-dim)">ArduinoOTA Хост:</span>
+          <strong style="color:var(--accent-green)">agrobox-esp32s3.local:3232</strong>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span style="color:var(--text-dim)">Flash Память:</span>
+          <strong style="color:var(--accent-cyan)">8MB (Dual OTA 3.34MB)</strong>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn-action" style="flex:1; justify-content:center; background:linear-gradient(135deg,#10b981,#06b6d4); color:#000; font-weight:700;" onclick="openEspOtaDirect()">
+          🚀 Открыть Веб-программатор (/update)
+        </button>
+        <button class="btn-action" style="padding:0.6rem 1rem;" onclick="closeOtaModal()">Закрыть</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -1907,8 +2157,114 @@ HTML_DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         container.scrollTop = container.scrollHeight;
       }
 
+      // 7. Поячеечная матрица лотка v2 (24 ячейки: 4x6)
+      if (data.cells && data.cells.length > 0) {
+        renderCellsMatrix(data.cells, data.cells_summary);
+      }
+
       // Footer
       document.getElementById('footer-infer').innerText = `Inference: ${data.plant.inference_ms} ms | ${data.plant.fps} FPS | ONNX ARM NEON`;
+    }
+
+    // 24-CELL MATRIX CLIENT LOGIC
+    let selectedCellId = null;
+    let cachedCellsData = [];
+
+    function renderCellsMatrix(cells, summary) {
+      if (!cells || cells.length === 0) return;
+      cachedCellsData = cells;
+      const grid = document.getElementById('cells-matrix-grid');
+      if (!grid) return;
+
+      if (summary) {
+        const badge = document.getElementById('cells-summary-badge');
+        if (badge) badge.innerText = `${summary.active_cells || 0}/24 Активно`;
+        const qStats = document.getElementById('cells-quick-stats');
+        if (qStats) {
+          qStats.innerText = `Здорово: ${summary.healthy_cells || 0} | Внимание: ${summary.warning_cells || 0} | Критично: ${summary.critical_cells || 0} | Полог: ${summary.avg_coverage_percent || 0}%`;
+        }
+      }
+
+      let html = '';
+      cells.forEach(c => {
+        let color = '#10b981';
+        let barColor = '#10b981';
+        if (c.status === 'EMPTY') { color = '#64748b'; barColor = '#64748b'; }
+        else if (c.status === 'WARNING') { color = '#f59e0b'; barColor = '#f59e0b'; }
+        else if (c.status === 'CRITICAL') { color = '#ef4444'; barColor = '#ef4444'; }
+
+        const isSel = (c.id === selectedCellId) ? 'selected' : '';
+        const covVal = Math.round(c.coverage);
+        html += `
+          <div class="cell-tile ${isSel}" onclick="selectCell('${c.id}')" id="tile-${c.id}">
+            <div class="cell-tile-id">
+              <span>${c.id}</span>
+              <span class="cell-tile-dot" style="background:${color}"></span>
+            </div>
+            <div class="cell-cov-bar-bg">
+              <div class="cell-cov-bar-fill" style="width:${covVal}%; background:${barColor};"></div>
+            </div>
+            <div class="cell-tile-val">${covVal}%</div>
+          </div>
+        `;
+      });
+      grid.innerHTML = html;
+
+      if (selectedCellId) {
+        updateCellInspector(selectedCellId);
+      }
+    }
+
+    function selectCell(cellId) {
+      selectedCellId = cellId;
+      document.querySelectorAll('.cell-tile').forEach(t => t.classList.remove('selected'));
+      const t = document.getElementById(`tile-${cellId}`);
+      if (t) t.classList.add('selected');
+      updateCellInspector(cellId);
+    }
+
+    function updateCellInspector(cellId) {
+      const c = cachedCellsData.find(x => x.id === cellId);
+      const panel = document.getElementById('cell-inspector-panel');
+      if (!c || !panel) return;
+
+      panel.style.display = 'block';
+      document.getElementById('ins-cell-title').innerText = `Ячейка ${c.id} (Ряд ${c.row+1}, Колонка ${c.col+1})`;
+      
+      const badge = document.getElementById('ins-cell-badge');
+      badge.innerText = c.status;
+      if (c.status === 'HEALTHY') {
+        badge.className = 'badge badge-healthy';
+      } else if (c.status === 'WARNING') {
+        badge.className = 'badge badge-warning';
+      } else if (c.status === 'CRITICAL') {
+        badge.className = 'badge badge-danger';
+      } else {
+        badge.className = 'badge';
+      }
+
+      document.getElementById('ins-cov').innerText = `${Math.round(c.coverage)}%`;
+      document.getElementById('ins-chl').innerText = `${Math.round(c.chlorosis)}%`;
+      document.getElementById('ins-mld').innerText = `${Math.round(c.mold)}%`;
+      document.getElementById('ins-hlth').innerText = `${Math.round(c.health)}%`;
+      document.getElementById('ins-cell-diag').innerText = `Диагноз: ${c.diag_ru || c.status}. Средний ExG: ${c.exg || 0}.`;
+    }
+
+    function openOtaModal() {
+      const modal = document.getElementById('ota-modal');
+      if (modal) modal.style.display = 'flex';
+      const ip = (currentState && currentState.esp32 && currentState.esp32.ip) ? currentState.esp32.ip : '192.168.4.1';
+      document.getElementById('ota-esp-ip').innerText = `http://${ip}/update`;
+    }
+
+    function closeOtaModal() {
+      const modal = document.getElementById('ota-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function openEspOtaDirect() {
+      const ip = (currentState && currentState.esp32 && currentState.esp32.ip) ? currentState.esp32.ip : window.location.hostname;
+      window.open(`http://${ip}/update`, '_blank');
     }
 
     // ACTIONS

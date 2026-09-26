@@ -9,6 +9,8 @@
 #include <esp_arduino_version.h>
 #include <math.h>
 #include <WebServer.h>
+#include <Update.h>
+#include <ArduinoOTA.h>
 
 // ==========================================
 // АППАРАТНЫЕ ПИНЫ (ESP32-S3)
@@ -2223,6 +2225,190 @@ void processSerialCommunication() {
 }
 
 // ==========================================
+// БЕСПРОВОДНОЕ ОБНОВЛЕНИЕ ПРОШИВКИ (OTA ENGINE)
+// ==========================================
+bool otaInProgress = false;
+bool arduinoOtaStarted = false;
+
+void drawOtaProgressScreen(const String& stage, int percent) {
+  static bool otaScreenInitialized = false;
+  if (!otaScreenInitialized) {
+    tft.fillScreen(RGB565(10, 14, 20));
+    // Header
+    tft.fillRect(0, 0, SCREEN_W, 34, RGB565(18, 25, 36));
+    tft.drawFastHLine(0, 34, SCREEN_W, RGB565(0, 245, 185));
+    tft.setTextColor(RGB565(0, 245, 185));
+    tft.setTextSize(2);
+    tft.setCursor(18, 9);
+    tft.print("AGROBOX CYBER OTA");
+
+    // Danger / Warning badge
+    tft.fillRect(16, 46, SCREEN_W - 32, 42, RGB565(28, 38, 54));
+    tft.drawRect(16, 46, SCREEN_W - 32, 42, RGB565(255, 180, 0));
+    tft.setTextColor(RGB565(255, 190, 40));
+    tft.setTextSize(1);
+    tft.setCursor(24, 54);
+    tft.print("FLASHING FIRMWARE VIA OTA");
+    tft.setCursor(24, 70);
+    tft.print("DO NOT POWER OFF DEVICE");
+
+    otaScreenInitialized = true;
+  }
+
+  // Stage text
+  tft.fillRect(16, 98, SCREEN_W - 32, 20, RGB565(10, 14, 20));
+  tft.setTextColor(RGB565(220, 235, 250));
+  tft.setTextSize(1);
+  tft.setCursor(18, 102);
+  tft.print(stage);
+
+  // Progress Bar
+  int barX = 16, barY = 126, barW = SCREEN_W - 32, barH = 26;
+  tft.drawRect(barX - 1, barY - 1, barW + 2, barH + 2, RGB565(0, 245, 185));
+  tft.fillRect(barX, barY, barW, barH, RGB565(16, 22, 32));
+  int fillW = (barW * constrain(percent, 0, 100)) / 100;
+  if (fillW > 0) {
+    tft.fillRect(barX, barY, fillW, barH, RGB565(0, 245, 185));
+  }
+
+  // Percentage
+  tft.fillRect(SCREEN_W / 2 - 45, barY + barH + 12, 90, 26, RGB565(10, 14, 20));
+  tft.setTextColor(RGB565(0, 245, 185));
+  tft.setTextSize(2);
+  tft.setCursor(SCREEN_W / 2 - 24, barY + barH + 14);
+  tft.print(String(percent) + "%");
+}
+
+void beginOtaSafety() {
+  otaInProgress = true;
+  pumpState = false;
+  digitalWrite(PUMP_PIN, LOW);
+  analogWrite(TFT_BL, 255);
+  isSleeping = false;
+}
+
+void setupArduinoOTA() {
+  if (arduinoOtaStarted) return;
+  ArduinoOTA.setHostname("agrobox-esp32s3");
+  ArduinoOTA.onStart([]() {
+    beginOtaSafety();
+    String type = (ArduinoOTA.getCommand() == U_FLASH) ? "Sketch" : "Filesystem";
+    drawOtaProgressScreen("ArduinoOTA: " + type, 0);
+    Serial.println("[OTA] ArduinoOTA Started: " + type);
+  });
+  ArduinoOTA.onEnd([]() {
+    drawOtaProgressScreen("SUCCESS! REBOOTING...", 100);
+    Serial.println("\n[OTA] Complete! Rebooting...");
+    delay(500);
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    int pct = (progress * 100) / total;
+    static int lastOtaPct = -1;
+    if (pct != lastOtaPct && pct % 2 == 0) {
+      lastOtaPct = pct;
+      drawOtaProgressScreen("Flashing ArduinoOTA...", pct);
+      Serial.printf("[OTA] Progress: %u%%\r", pct);
+    }
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    otaInProgress = false;
+    Serial.printf("[OTA] Error[%u]: ", error);
+    drawOtaProgressScreen("OTA ERROR: " + String(error), 0);
+  });
+  ArduinoOTA.begin();
+  arduinoOtaStarted = true;
+  Serial.println("[OTA] ArduinoOTA Service Started (Hostname: agrobox-esp32s3)");
+}
+
+void handleWebOtaPage() {
+  String html = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>AgroBox OTA Firmware Update</title><style>"
+                ":root{--bg:#0a0e14;--card:#121924;--border:#243248;--primary:#00f5b9;--text:#f8fafc;--muted:#8c9eb6;--alert:#ff4757}"
+                "body{margin:0;padding:24px;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,sans-serif}"
+                ".box{max-width:540px;margin:0 auto;background:var(--card);padding:28px;border-radius:20px;border:1px solid var(--border);box-shadow:0 14px 40px rgba(0,0,0,0.7)}"
+                "h1{margin:0 0 8px;font-size:22px;color:var(--primary);letter-spacing:0.04em;display:flex;align-items:center;gap:10px}"
+                ".sub{color:var(--muted);font-size:13px;margin-bottom:22px}"
+                ".info-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}"
+                ".info-card{background:#182232;padding:12px;border-radius:12px;border:1px solid var(--border)}"
+                ".info-card h4{margin:0 0 4px;font-size:11px;color:var(--muted);text-transform:uppercase}"
+                ".info-card div{font-size:16px;font-weight:700;color:var(--primary)}"
+                ".upload-drop{border:2px dashed var(--border);border-radius:16px;padding:32px 20px;text-align:center;cursor:pointer;background:#0d141e;transition:0.25s}"
+                ".upload-drop:hover,.upload-drop.dragover{border-color:var(--primary);background:#131d2b}"
+                ".icon{font-size:36px;margin-bottom:8px}"
+                "input[type=file]{display:none}"
+                ".btn{width:100%;margin-top:18px;padding:14px;font-size:15px;font-weight:700;border-radius:12px;border:none;cursor:pointer;background:var(--primary);color:#0a0e14;transition:0.2s}"
+                ".btn:disabled{background:#253346;color:#6b7d94;cursor:not-allowed}"
+                ".btn-back{margin-top:12px;background:transparent;border:1px solid var(--border);color:var(--muted)}"
+                ".btn-back:hover{border-color:var(--muted);color:#fff}"
+                ".p-wrap{margin-top:20px;display:none}"
+                ".p-bar-bg{height:18px;background:#182232;border-radius:9px;overflow:hidden;border:1px solid var(--border)}"
+                ".p-bar{height:100%;width:0%;background:linear-gradient(90deg,#00f5b9,#00b4d8);transition:width 0.15s ease}"
+                ".p-text{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:6px}"
+                ".msg{margin-top:14px;padding:12px;border-radius:10px;font-size:13px;display:none}"
+                ".msg.ok{background:#0e2f24;color:#00f5b9;border:1px solid #00f5b9}"
+                ".msg.err{background:#321419;color:#ff4757;border:1px solid #ff4757}"
+                "</style></head><body><div class='box'>"
+                "<h1><span>⚡</span> AGROBOX CYBER OTA</h1>"
+                "<div class='sub'>Wireless ESP32-S3 Firmware Flashing Station</div>"
+                "<div class='info-grid'>"
+                "<div class='info-card'><h4>Microcontroller</h4><div>ESP32-S3 (8MB)</div></div>"
+                "<div class='info-card'><h4>Free Heap</h4><div id='fh'>-- KB</div></div>"
+                "<div class='info-card'><h4>Sketch Size</h4><div id='ss'>-- KB</div></div>"
+                "<div class='info-card'><h4>Free OTA Space</h4><div id='fs'>-- KB</div></div>"
+                "</div>"
+                "<div class='upload-drop' id='dropArea' onclick='document.getElementById(\"fileInput\").click()'>"
+                "<div class='icon'>📦</div>"
+                "<strong id='fileName'>Select or drag & drop firmware.bin</strong>"
+                "<div style='font-size:12px;color:var(--muted);margin-top:4px'>PlatformIO binary build (.bin)</div>"
+                "</div>"
+                "<input type='file' id='fileInput' accept='.bin' onchange='onFileSelected(this)'>"
+                "<div class='p-wrap' id='progWrap'>"
+                "<div class='p-bar-bg'><div class='p-bar' id='progBar'></div></div>"
+                "<div class='p-text'><span id='progStage'>Uploading binary...</span><span id='progNum'>0%</span></div>"
+                "</div>"
+                "<div class='msg' id='statusMsg'></div>"
+                "<button class='btn' id='flashBtn' disabled onclick='startFlash()'>FLASH ESP32-S3 FIRMWARE</button>"
+                "<button class='btn btn-back' onclick='location.href=\"/\"'>← Back to Main Dashboard</button>"
+                "</div><script>"
+                "let selFile=null;"
+                "async function loadStats(){try{const r=await fetch('/api/ota/status');const d=await r.json();"
+                "document.getElementById('fh').innerText=Math.round(d.free_heap/1024)+' KB';"
+                "document.getElementById('ss').innerText=Math.round(d.sketch_size/1024)+' KB';"
+                "document.getElementById('fs').innerText=Math.round(d.free_sketch_space/1024)+' KB';"
+                "}catch(e){}}"
+                "function onFileSelected(input){if(input.files&&input.files[0]){selFile=input.files[0];"
+                "document.getElementById('fileName').innerText=selFile.name+' ('+Math.round(selFile.size/1024)+' KB)';"
+                "document.getElementById('flashBtn').disabled=false;}}"
+                "const da=document.getElementById('dropArea');"
+                "['dragenter','dragover'].forEach(e=>da.addEventListener(e,ev=>{ev.preventDefault();da.classList.add('dragover');}));"
+                "['dragleave','drop'].forEach(e=>da.addEventListener(e,ev=>{ev.preventDefault();da.classList.remove('dragover');}));"
+                "da.addEventListener('drop',ev=>{if(ev.dataTransfer.files&&ev.dataTransfer.files[0]){"
+                "selFile=ev.dataTransfer.files[0];document.getElementById('fileInput').files=ev.dataTransfer.files;"
+                "document.getElementById('fileName').innerText=selFile.name+' ('+Math.round(selFile.size/1024)+' KB)';"
+                "document.getElementById('flashBtn').disabled=false;}});"
+                "function startFlash(){if(!selFile)return;"
+                "const btn=document.getElementById('flashBtn');btn.disabled=true;"
+                "document.getElementById('progWrap').style.display='block';"
+                "const msg=document.getElementById('statusMsg');msg.style.display='none';"
+                "const xhr=new XMLHttpRequest();xhr.open('POST','/update',true);"
+                "xhr.upload.onprogress=function(e){if(e.lengthComputable){"
+                "const p=Math.round((e.loaded/e.total)*100);"
+                "document.getElementById('progBar').style.width=p+'%';"
+                "document.getElementById('progNum').innerText=p+'%';"
+                "if(p>=100){document.getElementById('progStage').innerText='Writing flash memory & verifying...';}}};"
+                "xhr.onload=function(){if(xhr.status===200){"
+                "msg.className='msg ok';msg.innerText='FIRMWARE FLASHED SUCCESSFULLY! ESP32-S3 is rebooting...';"
+                "msg.style.display='block';setTimeout(()=>{location.href='/';},4500);"
+                "}else{msg.className='msg err';msg.innerText='Flashing failed: '+xhr.responseText;msg.style.display='block';btn.disabled=false;}};"
+                "xhr.onerror=function(){msg.className='msg err';msg.innerText='Network error during upload.';msg.style.display='block';btn.disabled=false;};"
+                "const fd=new FormData();fd.append('firmware',selFile,selFile.name);xhr.send(fd);}"
+                "loadStats();"
+                "</script></body></html>";
+  webServer.send(200, "text/html", html);
+}
+
+// ==========================================
 // ЛОКАЛЬНЫЙ WEB DASHBOARD (MOBILE & PC)
 // ==========================================
 void setupWebDashboard() {
@@ -2277,7 +2463,8 @@ void setupWebDashboard() {
                   "</div>"
                   "<div class='actions'>"
                   "<button class='btn' id='pumpBtn' onclick='togglePump()'>Pump</button>"
-                  "<button class='btn sec' onclick='petSprout()'>❤️ Pet Sprout</button>"
+                  "<button class='btn sec' onclick='petSprout()'>❤️ Pet</button>"
+                  "<a href='/update' class='btn sec' style='text-decoration:none;display:inline-flex;align-items:center;justify-content:center'>⚡ OTA</a>"
                   "</div>"
                   "</div><script>"
                   "async function poll(){"
@@ -2433,6 +2620,61 @@ void setupWebDashboard() {
     currentWisdomIndex = (currentWisdomIndex + 1) % WISDOM_COUNT;
     if (currentScreen == SCR_SPROUT) drawSproutScreen();
     webServer.send(200, "application/json", "{\"status\":\"ok\",\"pet\":\"happy\"}");
+  });
+
+  // Маршруты беспроводного обновления прошивки (OTA)
+  webServer.on("/update", HTTP_GET, handleWebOtaPage);
+
+  webServer.on("/api/ota/status", HTTP_GET, []() {
+    String json = "{";
+    json += "\"status\":\"" + String(otaInProgress ? "flashing" : "idle") + "\",";
+    json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
+    json += "\"flash_size\":" + String(ESP.getFlashChipSize()) + ",";
+    json += "\"sketch_size\":" + String(ESP.getSketchSize()) + ",";
+    json += "\"free_sketch_space\":" + String(ESP.getFreeSketchSpace()) + ",";
+    json += "\"chip\":\"ESP32-S3\"";
+    json += "}";
+    webServer.send(200, "application/json", json);
+  });
+
+  webServer.on("/update", HTTP_POST, []() {
+    webServer.sendHeader("Connection", "close");
+    if (Update.hasError()) {
+      webServer.send(500, "application/json", "{\"status\":\"error\",\"msg\":\"Flash write failed\"}");
+    } else {
+      webServer.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"Firmware updated! Rebooting...\"}");
+      delay(800);
+      ESP.restart();
+    }
+  }, []() {
+    HTTPUpload& upload = webServer.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      beginOtaSafety();
+      Serial.printf("[WEB-OTA] File start: %s\n", upload.filename.c_str());
+      drawOtaProgressScreen("Receiving binary...", 0);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+      size_t total = Update.size();
+      int pct = (total > 0) ? (Update.progress() * 100) / total : 50;
+      static int lastWebPct = -1;
+      if (pct != lastWebPct && pct % 2 == 0) {
+        lastWebPct = pct;
+        drawOtaProgressScreen("Flashing: " + String(pct) + "%", pct);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("[WEB-OTA] Completed: %u bytes\n", upload.totalSize);
+        drawOtaProgressScreen("FLASH COMPLETE! REBOOTING...", 100);
+      } else {
+        Update.printError(Serial);
+        drawOtaProgressScreen("FLASH ERROR", 0);
+      }
+    }
   });
 
   webServer.begin();
@@ -3553,16 +3795,30 @@ void setup() {
 unsigned long lastSensorPoll = 0;
 
 void loop() {
+  // При активной OTA-прошивке отдаем приоритет приему и записи пакетов
+  if (otaInProgress) {
+    if (WiFi.status() == WL_CONNECTED) {
+      webServer.handleClient();
+      ArduinoOTA.handle();
+    }
+    delay(4);
+    return;
+  }
+
   processSerialCommunication();
   if (!isCalibrated) return;
   handleTouches();
 
   unsigned long now = millis();
 
-  // Запуск локального Web-сервера после подключения к Wi-Fi
+  // Запуск локального Web-сервера и ArduinoOTA после подключения к Wi-Fi
   if (WiFi.status() == WL_CONNECTED) {
-    if (!webServerStarted) setupWebDashboard();
+    if (!webServerStarted) {
+      setupWebDashboard();
+      setupArduinoOTA();
+    }
     webServer.handleClient();
+    ArduinoOTA.handle();
   }
 
   // Проверка активности для 3D-скринсейвера (60 секунд без касаний)

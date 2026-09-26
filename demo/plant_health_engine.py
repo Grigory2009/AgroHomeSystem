@@ -21,6 +21,15 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+try:
+    from cell_tracker import GridCellTracker, CellMetrics
+except ImportError:
+    try:
+        from demo.cell_tracker import GridCellTracker, CellMetrics
+    except ImportError:
+        GridCellTracker = None
+        CellMetrics = None
+
 # Agronomic Knowledge Base for 38 PlantVillage classes
 # Contains Russian/English names, pathogen types, severity levels, and treatment protocols.
 AGRONOMIC_KNOWLEDGE_BASE: Dict[str, Dict[str, Any]] = {
@@ -1072,6 +1081,9 @@ class PlantHealthDetector:
             except Exception as e:
                 logger.debug(f"Watercress neural classifier init notice: {e}")
 
+        # Grid Cell Tracker for 24-cell matrix (4x6 layout in v2 chassis)
+        self.grid_tracker = GridCellTracker(rows=6, cols=4) if GridCellTracker is not None else None
+
     def calculate_health_index(
         self,
         is_healthy: bool,
@@ -1367,3 +1379,30 @@ class PlantHealthDetector:
         cv2.putText(output, be_text, (w - 180, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 1, cv2.LINE_AA)
 
         return output
+
+    def diagnose_grid(
+        self,
+        frame: np.ndarray,
+        exg_img: Optional[np.ndarray] = None,
+        foliage_mask: Optional[np.ndarray] = None
+    ) -> Tuple[List[Any], Dict[str, Any]]:
+        """
+        Поячеечный анализ всей сетки (24 ячейки 4x6).
+        Возвращает: (список CellMetrics, сводный словарь статистики).
+        """
+        if self.grid_tracker is None:
+            return [], {}
+        metrics = self.grid_tracker.analyze(frame, exg_img=exg_img, foliage_mask=foliage_mask)
+        summary = self.grid_tracker.get_summary(metrics)
+        return metrics, summary
+
+    def draw_grid_hud(
+        self,
+        frame: np.ndarray,
+        metrics: Optional[List[Any]] = None,
+        show_summary: bool = True
+    ) -> np.ndarray:
+        """Отрисовка 24-ячеечного кибер-HUD оверлея на кадре."""
+        if self.grid_tracker is None:
+            return frame
+        return self.grid_tracker.draw_hud(frame, metrics=metrics, show_summary=show_summary)
